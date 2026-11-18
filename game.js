@@ -12,6 +12,7 @@
   const mechanism = byId('mechanism');
   const editMechanism = byId('edit-mechanism');
   const storageKey = 'jiexian-v2';
+  const generatorRevision = 3;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const turnKeys = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const labels = { free: '自由节点', mirror: '联动节点', rotor: '星盘节点', rail: '滑轨节点' };
@@ -182,7 +183,10 @@
     const pairs = level.controls.filter(({ kind }) => kind === 'mirror').length;
     const disks = level.controls.filter(({ kind }) => kind === 'rotor').length;
     const rails = new Set(level.controls.filter(({ kind }) => kind === 'rail').map(({ a }) => a)).size;
-    const extras = [pairs && `${pairs} 组联动`, disks && `${disks} 个星盘`, rails && `${rails} 条滑轨`].filter(Boolean);
+    const fixed = level.ownership.filter((index) => index === -1).length;
+    const obstacles = level.obstacles.length;
+    const extras = [fixed && `${fixed} 个固定点`, pairs && `${pairs} 组联动`, disks && `${disks} 个星盘`,
+      rails && `${rails} 条滑轨`, obstacles && `${obstacles} 个禁行区`].filter(Boolean);
     const random = tab === 'random';
     byId('level-title').textContent = random ? '随机解线' : '自定义题';
     byId('difficulty-label').textContent = random ? puzzles.difficulty[level.rank].label : editing ? '编辑题目' : '试玩题目';
@@ -521,7 +525,7 @@
   }
 
   function createRandom(rank, count, mode, auto) {
-    const config = { rank, count, mechanism: mode, auto, revision: 2 };
+    const config = { rank, count, mechanism: mode, auto, revision: generatorRevision };
     for (let tries = 0; tries < 6; tries++) {
       config.seed = Math.floor(Math.random() * 4294967296);
       if (config.seed !== randomConfig?.seed && randomize(config)) return true;
@@ -1004,7 +1008,7 @@
   const config = saved.random?.config;
   const valid = config && Object.hasOwn(puzzles.difficulty, config.rank) && Object.hasOwn(puzzles.modes, config.mechanism) &&
     Number.isInteger(config.count) && config.count >= puzzles.minNodes && config.count <= puzzles.maxNodes && Number.isInteger(config.seed);
-  if (valid && config.revision !== 2) {
+  if (valid && config.revision !== generatorRevision) {
     const count = config.auto ? puzzles.defaultCount(config.rank, config.mechanism) : config.count;
     createRandom(config.rank, count, config.mechanism, config.auto);
   } else if (valid) randomize(config, saved.random);

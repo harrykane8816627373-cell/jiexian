@@ -5,9 +5,9 @@
   const minNodes = 4;
   const maxNodes = 24;
   const difficulty = {
-    easy: { label: '简单', nodes: 6, edgeFactor: 1.18, scramble: 0.22, target: 1 },
-    medium: { label: '中等', nodes: 10, edgeFactor: 1.6, scramble: 0.52, target: 3 },
-    hard: { label: '困难', nodes: 15, edgeFactor: 2.05, scramble: 0.94, target: 6 },
+    easy: { label: '简单', nodes: 6, edgeFactor: 1.18, scramble: 0.22, target: 1, active: .58, maxAngle: 1.4, groups: 2, maxTrackNodes: 5 },
+    medium: { label: '中等', nodes: 10, edgeFactor: 1.6, scramble: 0.52, target: 3, active: .76, maxAngle: 2.4, groups: 3, maxTrackNodes: 8 },
+    hard: { label: '困难', nodes: 15, edgeFactor: 2.05, scramble: 0.94, target: 6, active: .92, maxAngle: Math.PI, groups: 4, maxTrackNodes: 11 },
   };
   const modes = {
     classic: { label: '经典', rule: '拖动红色节点，让冲突连线恢复为实线。' },
@@ -66,15 +66,47 @@
     return graph;
   }
 
-  function trackSizes(count, rank, kinds) {
-    if (!kinds.includes('rail')) return [];
-    const mixed = kinds.length > 1;
-    const reserve = (kinds.includes('mirror') ? 2 : 0) + (kinds.includes('rotor') ? 2 : 0) + 2;
-    const total = Math.min(count - reserve, mixed ? (rank === 'hard' && count >= 16 ? 5 : 3) :
-      rank === 'hard' ? Math.min(10, Math.floor(count * .52)) : rank === 'medium' ? Math.min(6, Math.floor(count * .50)) : 3);
-    if (total < 2) return [];
-    const tracks = mixed ? (total >= 5 ? 2 : 1) : Math.min(3, Math.max(1, Math.floor(total / 3)));
-    return Array.from({ length: tracks }, (_, i) => Math.floor(total / tracks) + Number(i < total % tracks));
+  const mechanisms = ['mirror', 'rotor', 'rail'];
+  const between = (low, high, random) => low + Math.floor(random() * (high - low + 1));
+
+  function recipeFor(count, rank, mode, random) {
+    const settings = difficulty[rank];
+    const mixed = mode === 'mixed';
+    const groupSizes = { mirror: [], rotor: [], rail: [] };
+    const minAnchors = count >= 13 ? 3 : count >= 6 ? 2 : 1;
+    const maxAnchors = Math.min(count - 3, Math.ceil(count * (rank === 'hard' ? .50 : .45)));
+    const fixed = mixed ? between(minAnchors, maxAnchors, random) :
+      mode === 'fixed' ? between(1, Math.min(count - 1, Math.max(2, Math.floor(count * .45))), random) : 0;
+    const obstacleCap = count < 8 ? 1 : rank === 'hard' && count >= 16 ? 3 : 2;
+    const obstacles = mode === 'obstacle' || mixed && random() < .83 ? between(1, obstacleCap, random) : 0;
+    if (!mixed && !mechanisms.includes(mode)) return { fixed, obstacles, ...groupSizes };
+
+    const maximum = mixed ? count - fixed - 1 : mode === 'rail' ? Math.min(count - 2, settings.maxTrackNodes) :
+      mode === 'mirror' ? Math.min(count, 2 * Math.max(2, settings.groups + 1)) : Math.min(count - 1, 13);
+    const minimum = mixed ? Math.max(2, Math.floor(maximum * .57)) : mode === 'mirror' && count >= 8 ? 4 :
+      Math.max(2, Math.floor(maximum * .50));
+    let remaining = between(minimum, maximum, random);
+    const maxKinds = Math.min(3, Math.floor(remaining / 2));
+    const kinds = mixed ? shuffle(mechanisms, random).slice(0, between(rank === 'hard' && maxKinds > 1 ? 2 : 1, maxKinds, random)) : [mode];
+    for (const kind of kinds) groupSizes[kind].push(2);
+    remaining -= kinds.length * 2;
+
+    // Spend the remaining slots on either a new group or a larger disk/track.
+    const caps = { mirror: settings.groups + 1, rotor: rank === 'hard' ? 3 : 2, rail: rank === 'easy' ? 2 : 3 };
+    const sizes = { mirror: 2, rotor: rank === 'hard' ? 6 : rank === 'medium' ? 5 : 4, rail: 5 };
+    while (remaining > 0) {
+      const moves = kinds.flatMap((kind) => {
+        const groups = groupSizes[kind];
+        const additions = groups.flatMap((size, index) => size < sizes[kind] ? [{ kind, index, cost: 1 }] : []);
+        if (remaining >= 2 && groups.length < caps[kind]) additions.push({ kind, index: groups.length, cost: 2 });
+        return additions;
+      });
+      if (!moves.length) break;
+      const { kind, index, cost } = moves[Math.floor(random() * moves.length)];
+      groupSizes[kind][index] = (groupSizes[kind][index] ?? 0) + cost;
+      remaining -= cost;
+    }
+    return { fixed, obstacles, ...groupSizes };
   }
 
   function addTracks(points, sizes, random) {
@@ -127,10 +159,8 @@
 
   function buildWitness(count, rank, mode, random) {
     const settings = difficulty[rank];
-    const primary = shuffle(['mirror', 'rotor', 'rail'], random);
-    const kinds = mode === 'mixed' ? [...primary.slice(0, count < 6 ? 1 : count < 9 ? 2 : 3), 'fixed', 'obstacle'] : [mode];
-    const sizes = trackSizes(count, rank, kinds);
-    const trackNodes = sizes.reduce((sum, size) => sum + size, 0);
+    const recipe = recipeFor(count, rank, mode, random);
+    const trackNodes = recipe.rail.reduce((sum, size) => sum + size, 0);
     const inside = trackNodes ? 0 : count >= 10 && rank === 'hard' ? 2 : count >= 6 && rank !== 'easy' ? 1 : 0;
     const ring = count - trackNodes - inside;
     const phase = random() * 2 * Math.PI;
@@ -141,53 +171,34 @@
     for (let i = 0; i < inside; i++) {
       points.push([450 + (i - (inside - 1) / 2) * 205 + (random() - .5) * 48, 270 + (random() - .5) * 106]);
     }
-    const controlled = addTracks(points, sizes, random);
+    const controlled = addTracks(points, recipe.rail, random);
     const graph = fitGraph(points, ring, settings, random);
     if (!graph) return null;
     const available = shuffle(Array.from({ length: ring + inside }, (_, i) => i), random);
     const take = () => available.pop();
-    if (kinds.includes('rotor')) {
-      const extraInMix = mode === 'mixed' && count >= 18 && rank === 'hard' && random() < .5;
-      const reserve = kinds.includes('mirror') ? (extraInMix ? 7 : 4) : 1;
-      const amount = extraInMix || mode === 'rotor' && count >= (rank === 'hard' ? 10 : 13) ? 2 : 1;
-      const centers = [];
-      for (let i = 0; i < amount; i++) {
-        const wanted = rank === 'hard' ? 5 : rank === 'medium' ? 4 : 3;
-        const desired = Math.max(2, Math.min(wanted, available.length - reserve - 2 * (amount - i - 1)));
-        const disk = chooseRotor(points, available, desired, centers, random);
-        if (!disk) {
-          if (!i) return null;
-          break;
-        }
-        disk.members.forEach((node) => available.splice(available.indexOf(node), 1));
-        centers.push(disk.center);
-        controlled.push(g.rotor(disk.members, disk.center, 0));
-      }
+    const centers = [];
+    for (const size of recipe.rotor) {
+      const disk = chooseRotor(points, available, size, centers, random);
+      if (!disk) return null;
+      disk.members.forEach((node) => available.splice(available.indexOf(node), 1));
+      centers.push(disk.center);
+      controlled.push(g.rotor(disk.members, disk.center, 0));
     }
-    if (kinds.includes('mirror')) {
-      const wanted = rank === 'hard' ? 4 : rank === 'medium' ? 3 : 2;
-      const target = mode === 'mixed' ? Math.min(wanted, Math.max(1, Math.floor(count / 6))) : wanted;
-      const pairs = Math.min(Math.floor(available.length / 2), target);
-      for (let i = 0; i < pairs; i++) {
-        const a = take();
-        const b = take();
-        controlled.push(g.mirror(a, b, points[a]));
-      }
+    for (let i = 0; i < recipe.mirror.length; i++) {
+      const a = take();
+      const b = take();
+      controlled.push(g.mirror(a, b, points[a]));
     }
-    if (kinds.includes('fixed')) {
-      const anchors = Math.min(available.length - 1, mode === 'mixed' ? Math.max(1, Math.floor(count / 11)) : Math.max(1, Math.floor(count / 5)));
-      for (let i = 0; i < anchors; i++) take();
-    }
-    if (kinds.includes('obstacle')) {
+    for (let i = 0; i < recipe.fixed; i++) take();
+    if (recipe.obstacles) {
       const candidates = Array.from({ length: 80 }, () => ({
         center: [91 + random() * 718, 100 + random() * 340], r: 30 + random() * 14,
       }));
-      const amount = rank === 'hard' && count >= 9 ? 2 : 1;
       for (const candidate of candidates) {
         if (graph.obstacles.some((other) => g.distance(other.center, candidate.center) < other.r + candidate.r + 20)) continue;
         graph.obstacles.push(candidate);
         if (g.evaluate(graph, points).count) graph.obstacles.pop();
-        if (graph.obstacles.length >= amount) break;
+        if (graph.obstacles.length >= recipe.obstacles) break;
       }
       if (!graph.obstacles.length) return null;
     }
@@ -224,16 +235,22 @@
         });
         special.forEach((i) => {
           const control = puzzle.controls[i];
-          if (control.kind === 'rotor') start[i] = [(random() > .5 ? 1 : -1) * (.5 + random() * 2.45)];
+          if (control.kind === 'rail' || random() >= settings.active) return;
+          if (control.kind === 'rotor') start[i] = [(random() > .5 ? 1 : -1) * (.16 + random() * (settings.maxAngle - .16))];
           if (control.kind === 'mirror') {
             const [x, y] = control.target;
             start[i] = g.normalize(control, [x + (random() - .5) * 470, y + (random() - .5) * 390]);
           }
         });
         for (const members of tracks.values()) {
-          const gap = .80 / (members.length - 1);
+          if (random() >= settings.active) continue;
+          const track = puzzle.controls[members[0]];
+          const length = g.distance(track.a, track.b);
+          const gap = (g.radius * 2 + 7) / length;
+          const slack = .92 - gap * (members.length - 1);
+          const offsets = members.map(() => random()).sort((a, b) => a - b);
           shuffle(members, random).forEach((i, position) => {
-            start[i] = [.10 + gap * position + (random() - .5) * Math.min(.10, gap * .28)];
+            start[i] = [.04 + gap * position + slack * offsets[position]];
           });
         }
         const faults = g.evaluate(puzzle, g.positions(puzzle, start)).count;
