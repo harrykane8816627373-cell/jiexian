@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10121c">
+  <meta name="theme-color" content="#ffffff">
   <meta name="description" content="解线是一款拖动节点、理顺连线的空间益智游戏。按难度随机出题，也可以自己摆点连线并求解。">
   <title>解线 · Untangle</title>
-  <link rel="icon" href="./icon.png" type="image/png">
-  <link rel="stylesheet" href="./style.css?v=2">
+  <link rel="icon" href="./icon.png?v=3" type="image/png">
+  <link rel="stylesheet" href="./style.css?v=3">
   <script src="./engine.js?v=2" defer></script>
   <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=2" defer></script>
-  <script src="./game.js?v=2" defer></script>
+  <script src="./puzzles.js?v=3" defer></script>
+  <script src="./game.js?v=3" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -25,6 +25,8 @@
     <symbol id="i-in" viewBox="0 0 24 24"><path d="M5 12h14m-7-7v14"/></symbol>
     <symbol id="i-out" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
     <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5m8-3v.1"/></symbol>
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5m0 6v5h-5m-6 0H4v-5m0 0 5-5m11-6-5 5"/></symbol>
+    <symbol id="i-exit-fullscreen" viewBox="0 0 24 24"><path d="M4 9h5V4m6 0v5h5m0 6h-5v5m-6 0v-5H4m0 5 5-5M20 4l-5 5"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 6h3c6 0 6 12 12 12h3m-4-4 4 4-4 4M3 18h3c2 0 3.5-1.5 4.5-3.5m3-5C15 7 16 6 18 6h3m-4-4 4 4-4 4"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
@@ -33,7 +35,7 @@
   <header class="top">
     <div class="top-inner">
       <div class="brand">
-        <img src="./icon.png" alt="" width="42" height="42">
+        <img src="./icon.png?v=3" alt="" width="42" height="42">
         <div><strong>解线</strong><span>UNTANGLE</span></div>
       </div>
       <nav class="modes" aria-label="游戏模式">
@@ -66,11 +68,11 @@
             <button id="zoom-out" title="缩小" aria-label="缩小"><svg><use href="#i-out"/></svg></button>
             <button id="zoom-in" title="放大" aria-label="放大"><svg><use href="#i-in"/></svg></button>
             <button id="fit" title="回正视图（1）" aria-label="回正视图"><svg><use href="#i-fit"/></svg></button>
+            <button id="fullscreen" title="全屏" aria-label="全屏" aria-pressed="false"><svg><use href="#i-fullscreen"/></svg></button>
           </div>
           <div class="win" id="win" role="status" hidden>
             <div><strong id="win-title"></strong><span id="win-detail"></span></div>
           </div>
-          <div class="paused" id="paused" hidden>计时已暂停</div>
         </div>
         <div class="board-footer">
           <div class="legend"><span><i class="clear-line"></i>顺畅</span><span><i class="cross-line"></i>冲突</span><span id="anchor-legend"><i class="anchor-mark">×</i>固定点</span></div>
@@ -138,7 +140,7 @@
 
   <dialog id="rules-dialog" aria-labelledby="rules-title">
     <div class="dialog-heading"><h2 id="rules-title">玩法说明</h2><form method="dialog"><button title="关闭" aria-label="关闭"><svg><use href="#i-close"/></svg></button></form></div>
-    <p>移动节点，让所有连线变为绿色。避免线段交叉、重叠，以及节点过于靠近其他节点或无关连线。</p>
+    <p>拖动红色节点，消除交叉、重叠和间距冲突。理顺后节点变绿，虚线变为实线。</p>
     <dl class="mechanics">
       <div><dt>固定点 ×</dt><dd>方形锚点保持原位。</dd></div>
       <div><dt>联动 A / B</dt><dd>同字母的两个节点沿相反方向移动。</dd></div>
@@ -146,9 +148,9 @@
       <div><dt>滑轨</dt><dd>带短划的节点沿轨道滑动。</dd></div>
       <div><dt>禁行区</dt><dd>节点与连线都要和带纹理的圆圈保持距离。</dd></div>
     </dl>
-    <p>拖动空白处移动视图，滚轮或 ＋ / − 缩放，按 1 回正。键盘可用 Q / E 选择节点、方向键移动，按住 Shift 大步移动。</p>
+    <p>拖动空白处移动视图，滚轮或 ＋ / − 缩放，按 1 回正。点棋盘右上角的全屏按钮可以扩大视野。键盘可用 Q / E 选择节点、方向键移动。</p>
     <p>「提示一步」会替你走一步。「一键求解」会演示整套动作。两种操作都可以撤销。</p>
-    <p>计时在首次移动时自动开始，也可手动开始。暂停时棋盘停止操作，解开后自动停止计时。</p>
+    <p>计时在首次移动时自动开始，也可以手动开始或暂停。解开后自动停表。暂停或解开后，仍然可以操作棋盘。</p>
     <p>自定义题中，点空白处加点，再依次点两个节点连线。可拖动、删除节点或连线，也可直接求解自己画的题。</p>
   </dialog>
 </body>

@@ -10,7 +10,7 @@
     hard: { label: '困难', nodes: 15, edgeFactor: 2.05, scramble: 0.94, target: 6 },
   };
   const modes = {
-    classic: { label: '经典', rule: '拖动圆点，让虚线恢复为绿色实线。' },
+    classic: { label: '经典', rule: '拖动红色节点，让冲突连线恢复为实线。' },
     fixed: { label: '固定点', rule: '带 × 的锚点保持原位，移动其余节点。' },
     mirror: { label: '反向联动', rule: '拖动任意 A 节点，它的搭档会沿相反方向移动。' },
     rotor: { label: '旋转星盘', rule: '拖动任意 R 节点，整组会一起绕圆心旋转。' },

@@ -66,6 +66,7 @@
   let hover = -1;
   let size = { w: 0, h: 0, dpr: 1 };
   let frame = 0;
+  let expandedView = false;
 
   for (const [value, { label }] of Object.entries(puzzles.modes)) mechanism.add(new Option(label, value));
   const editButtons = [...byId('edit-tools').querySelectorAll('button')];
@@ -79,11 +80,10 @@
   }
 
   function startClock() {
-    if (timerMode === 'idle' || timerMode === 'paused') {
-      clockStart = performance.now();
-      timerMode = 'running';
-      updateControls();
-    }
+    if (timerMode === 'running') return;
+    clockStart = performance.now();
+    timerMode = 'running';
+    updateControls();
   }
 
   function stopClock(nextMode) {
@@ -123,7 +123,7 @@
     assisted = usable && run.assisted === true;
     elapsed = usable && Number.isFinite(run.elapsed) && run.elapsed >= 0 ? run.elapsed : 0;
     won = !editing && g.evaluate(level, g.positions(level, state)).count === 0;
-    timerMode = won ? 'finished' : usable && ['paused', 'running'].includes(run.timerMode) ? run.timerMode : 'idle';
+    timerMode = usable && ['paused', 'running'].includes(run.timerMode) ? run.timerMode : won ? 'finished' : 'idle';
     clockStart = timerMode === 'running' ? performance.now() : null;
     history = [];
     view = { x: 0, y: 0, zoom: 1 };
@@ -155,7 +155,7 @@
     byId('difficulty-label').textContent = random ? puzzles.difficulty[level.rank].label : editing ? '编辑题目' : '试玩题目';
     byId('puzzle-meta').textContent = random ? `${puzzles.modes[level.mode].label} · ${meta}` : meta;
     byId('level-rule').textContent = random ? puzzles.modes[level.mode].rule :
-      editing ? '自己布置节点和连线，再试玩或求解。' : '拖动圆点，让虚线恢复为绿色实线。';
+      editing ? '自己布置节点和连线，再试玩或求解。' : '拖动红色节点，让冲突连线恢复为实线。';
     board.setAttribute('aria-label', editing ? '自定义题编辑棋盘' : '解线棋盘。用 Q 或 E 选择节点，用方向键移动。');
     byId('anchor-legend').hidden = !level.ownership.includes(-1);
     byId('board-help').textContent = editing ? '滚轮缩放 · 选择「移动」可平移' : '拖动空白处平移 · 滚轮缩放 · 键盘用 Q / E 选点';
@@ -183,14 +183,11 @@
   function updateControls() {
     const dragging = moving?.kind === 'node';
     const busy = !!animation || dragging;
-    const paused = timerMode === 'paused';
-    byId('solve').disabled = won || busy || paused;
-    byId('hint').disabled = won || busy || paused;
-    byId('undo').disabled = !history.length || busy || paused;
+    byId('solve').disabled = busy;
+    byId('hint').disabled = busy;
+    byId('undo').disabled = !history.length || busy;
     byId('restart').disabled = busy || (!moves && timerMode === 'idle');
-    byId('timer-toggle').disabled = won || busy;
-    byId('timer-toggle').textContent = timerMode === 'running' ? '暂停' : paused ? '继续' : won ? '已结束' : '开始';
-    byId('paused').hidden = !paused || editing;
+    byId('timer-toggle').textContent = timerMode === 'running' ? '暂停' : timerMode === 'idle' ? '开始' : '继续';
     byId('zoom-out').disabled = view.zoom <= 0.75 || dragging;
     byId('zoom-in').disabled = view.zoom >= 2.8 || dragging;
     byId('fit').disabled = (view.zoom === 1 && !view.x && !view.y) || dragging;
@@ -205,15 +202,21 @@
     if (byId('clock').textContent !== text) byId('clock').textContent = text;
   }
 
+  function refreshCompletion() {
+    const complete = g.evaluate(level, g.positions(level, state)).count === 0;
+    if (complete && !won) stopClock('finished');
+    if (!complete && timerMode === 'finished') timerMode = 'paused';
+    won = complete;
+  }
+
   function completeMove(before, count, helpUsed, message = '') {
     history.push(before);
     if (history.length > 120) history.shift();
     if (!helpUsed) suggestion = null;
     moves += count;
     assisted ||= helpUsed;
-    startClock();
-    won = g.evaluate(level, g.positions(level, state)).count === 0;
-    if (won) stopClock('finished');
+    if (timerMode === 'idle') startClock();
+    refreshCompletion();
     setStatus(won ? (assisted ? '本题已辅助解开。' : '本题已独立解开。') : message);
     updatePanel();
     save();
@@ -224,11 +227,7 @@
     if (byId('undo').disabled) return;
     ({ state, moves, assisted } = history.pop());
     suggestion = null;
-    if (won) {
-      timerMode = 'idle';
-      startClock();
-    }
-    won = false;
+    refreshCompletion();
     setStatus('已撤销上一次操作。');
     updatePanel();
     save();
@@ -353,8 +352,11 @@
 
   function animate(singleStep) {
     const plan = suggestion ?? g.solve(level, state);
-    if (!plan.length) return;
-    startClock();
+    if (!plan.length) {
+      setStatus('连线已经理顺，可以继续拖动节点。');
+      return;
+    }
+    if (timerMode === 'idle') startClock();
     const steps = singleStep ? plan.slice(0, 1) : plan;
     const before = currentSnapshot();
     const playback = { state: g.copy(state), index: steps[0].index };
@@ -424,6 +426,34 @@
     render();
   }
 
+  function syncFullscreen() {
+    const active = Boolean(document.fullscreenElement) || expandedView;
+    document.documentElement.classList.toggle('game-fullscreen', active);
+    const button = byId('fullscreen');
+    const label = active ? '退出全屏' : '全屏';
+    button.setAttribute('aria-pressed', String(active));
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.querySelector('use').setAttribute('href', active ? '#i-exit-fullscreen' : '#i-fullscreen');
+  }
+
+  async function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {});
+      return;
+    }
+    if (!expandedView && document.fullscreenEnabled && document.documentElement.requestFullscreen) {
+      try {
+        await document.documentElement.requestFullscreen();
+        return;
+      } catch {
+        // Embedded browsers may only allow an expanded layout within the viewport.
+      }
+    }
+    expandedView = !expandedView;
+    syncFullscreen();
+  }
+
   function hitTest(point, touch) {
     const { k } = transform();
     let found = -1;
@@ -438,7 +468,7 @@
   }
 
   board.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || moving || animation || timerMode === 'paused') return;
+    if (event.button !== 0 || moving || animation) return;
     const at = local(event);
     const point = toWorld(at);
     const node = hitTest(point, event.pointerType === 'touch');
@@ -450,7 +480,7 @@
       setStatus('这个锚点固定在原位。');
       return;
     }
-    if (node !== -1 && !won) {
+    if (node !== -1) {
       const index = level.ownership[node];
       moving = { kind: 'node', node, index, point, before: currentSnapshot(), id: event.pointerId };
     } else {
@@ -481,7 +511,7 @@
       } else {
         const { node, index, before } = moving;
         state[index] = g.dragValue(level, node, point, before.state[index], moving.point);
-        if (!editing && g.moveDistance(level.controls[index], before.state[index], state[index]) >= 2) startClock();
+        if (!editing && timerMode === 'idle' && g.moveDistance(level.controls[index], before.state[index], state[index]) >= 2) startClock();
       }
     }
     render();
@@ -516,7 +546,7 @@
 
   board.addEventListener('keydown', (event) => {
     const key = event.key.toLowerCase();
-    if (event.ctrlKey || event.metaKey || event.altKey || animation || moving || won || timerMode === 'paused') return;
+    if (event.ctrlKey || event.metaKey || event.altKey || animation || moving) return;
     if (key === 'q' || key === 'e') {
       event.preventDefault();
       const order = level.ownership.map((index, node) => index < 0 ? -1 : node).filter((node) => node >= 0);
@@ -567,7 +597,7 @@
     ctx.scale(k, k);
     ctx.translate(-g.width / 2, -g.height / 2);
     ctx.lineWidth = 1 / k;
-    ctx.strokeStyle = '#6b78983b';
+    ctx.strokeStyle = '#e3e3e0';
     ctx.beginPath();
     ctx.roundRect(24, 26, g.width - 48, g.height - 52, 15);
     ctx.stroke();
@@ -590,28 +620,28 @@
     level.controls.forEach((control) => {
       if (control.kind === 'rotor') {
         const orbit = g.distance(points[control.members[0]], control.center);
-        circle(control.center, orbit + 29, '#4a392d38', '#9e794d80');
+        circle(control.center, orbit + 29, '#f6f6f4', '#b0b0ab');
         ctx.setLineDash([4, 7]);
-        circle(control.center, orbit, null, '#c4956577');
+        circle(control.center, orbit, null, '#8e8e88');
         ctx.setLineDash([]);
-        circle(control.center, 5, '#f4bd79', '#b78048');
+        circle(control.center, 4, '#71716b');
       }
       if (control.kind === 'rail') {
         ctx.lineWidth = 5;
-        line(control.a, control.b, '#81a0e76b');
-        circle(control.a, 5, '#9eb5ec');
-        circle(control.b, 5, '#9eb5ec');
+        line(control.a, control.b, '#cdcdca');
+        circle(control.a, 5, '#81817d');
+        circle(control.b, 5, '#81817d');
         ctx.lineWidth = 1 / k;
       }
     });
     level.obstacles.forEach(({ center, r }, i) => {
       const bad = faults.badObstacles.has(i);
-      circle(center, r, bad ? '#c48d5833' : '#b86f8730', bad ? '#f4bc7c' : '#b98eac');
+      circle(center, r, bad ? '#fcf1f1' : '#f5f5f3', bad ? '#ad4850' : '#96968f');
       ctx.save();
       ctx.clip();
       ctx.lineWidth = 1.2 / k;
       for (let dx = -2 * r; dx <= 2 * r; dx += 13) {
-        line([center[0] + dx, center[1] - r], [center[0] + dx - 2 * r, center[1] + r], bad ? '#e5a25d64' : '#c794b54d');
+        line([center[0] + dx, center[1] - r], [center[0] + dx - 2 * r, center[1] + r], bad ? '#bd616879' : '#85857b80');
       }
       ctx.restore();
     });
@@ -620,7 +650,7 @@
       ctx.lineWidth = Math.max(2.15, 1.35 / k);
       ctx.setLineDash(drawBad ? [7 / k, 5 / k] : []);
       level.edges.forEach(([a, b], i) => {
-        if (faults.badEdges.has(i) === drawBad) line(points[a], points[b], drawBad ? '#b993f5' : '#79ceb0');
+        if (faults.badEdges.has(i) === drawBad) line(points[a], points[b], '#111111');
       });
     }
     ctx.setLineDash([]);
@@ -631,25 +661,28 @@
       const kind = control?.kind ?? 'fixed';
       const picked = node === selection || node === editorOrigin || moving?.kind === 'node' && index === moving.index || animation?.index === index;
       const r = level.radius && level.radius < g.radius ? Math.max(2 / k, level.radius) : Math.max(g.radius, 7.2 / k);
-      const color = faults.badNodes.has(node) ? '#c4a3ff' : '#91f2c5';
+      const color = faults.badNodes.has(node) ? '#c32e37' : '#287646';
       ctx.lineWidth = 1.5 / k;
-      if (picked || node === hover) circle(point, r + 6 / k, null, picked ? color : '#a8aeca');
       if (kind === 'fixed') {
+        const border = 1.5 / k;
+        ctx.beginPath();
+        ctx.roundRect(px - r - border, py - r - border, (r + border) * 2, (r + border) * 2, r * .34);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
         ctx.beginPath();
         ctx.roundRect(px - r, py - r, r * 2, r * 2, r * .34);
-        ctx.fillStyle = '#242b3e';
+        ctx.fillStyle = color;
         ctx.fill();
-        ctx.strokeStyle = '#9caac8';
-        ctx.stroke();
       } else {
-        circle(point, r + 3.5 / k, faults.badNodes.has(node) ? '#a67df332' : '#69e2ae2b');
-        circle(point, r, '#202238', color);
+        circle(point, r + 1.5 / k, '#fff');
+        circle(point, r, color);
       }
+      if (picked || node === hover) circle(point, r + 5 / k, null, picked ? color : '#6b6b66');
       if (kind === 'free' && !editing) {
-        circle(point, Math.min(r * .42, Math.max(4.2, 2.5 / k)), color);
+        circle(point, Math.min(r * .27, Math.max(3.4, 1.8 / k)), '#fff');
       } else {
         const label = editing ? String(node + 1) : kind === 'fixed' ? '×' : kind === 'rotor' ? 'R' : kind === 'rail' ? '│' : 'A';
-        ctx.fillStyle = kind === 'rotor' ? '#f8ca8a' : kind === 'rail' ? '#afcbff' : kind === 'fixed' ? '#cbd5ec' : color;
+        ctx.fillStyle = '#fff';
         ctx.font = `700 ${Math.max(15, 10 / k)}px "Segoe UI", sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -723,8 +756,14 @@
   byId('zoom-in').addEventListener('click', () => zoom(1.24));
   byId('zoom-out').addEventListener('click', () => zoom(1 / 1.24));
   byId('fit').addEventListener('click', resetView);
+  byId('fullscreen').addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', syncFullscreen);
   document.addEventListener('keydown', (event) => {
     if (byId('rules-dialog').open) return;
+    if (event.key === 'Escape' && expandedView) {
+      expandedView = false;
+      syncFullscreen();
+    }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
       event.preventDefault();
