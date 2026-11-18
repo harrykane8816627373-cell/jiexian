@@ -141,8 +141,17 @@
     byId('win-title').textContent = assisted ? '已辅助解开' : '解线成功';
     byId('win-detail').textContent = `${moves} 步${level.date && !assisted && moves <= level.goal ? ' · 达成今日目标' : ''}`;
     byId('next').hidden = mode !== 'classic' || chapter >= g.levels.length - 1;
+    updateStats(g.evaluate(level, g.positions(level, state)).count);
     updateControls();
     updateClock();
+  }
+
+  function updateStats(conflicts) {
+    const counter = byId('conflicts');
+    const count = String(conflicts);
+    if (counter.textContent !== count) counter.textContent = count;
+    counter.classList.toggle('good', !conflicts);
+    if (byId('moves').textContent !== String(moves)) byId('moves').textContent = moves;
   }
 
   function updateControls() {
@@ -387,11 +396,7 @@
     const active = animation?.state ?? state;
     const points = g.positions(level, active);
     const faults = g.evaluate(level, points);
-    const counter = byId('conflicts');
-    const count = String(faults.count);
-    if (counter.textContent !== count) counter.textContent = count;
-    counter.classList.toggle('good', !faults.count);
-    if (byId('moves').textContent !== String(moves)) byId('moves').textContent = moves;
+    updateStats(faults.count);
     if (!size.w || !size.h) return;
     const { k, x, y } = transform();
     ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
