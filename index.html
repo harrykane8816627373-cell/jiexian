@@ -7,11 +7,11 @@
   <meta name="description" content="解线是一款拖动节点、理顺连线的空间益智游戏。按难度随机出题，也可以自己摆点连线并求解。">
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
-  <link rel="stylesheet" href="./style.css?v=3">
-  <script src="./engine.js?v=2" defer></script>
+  <link rel="stylesheet" href="./style.css?v=4">
+  <script src="./engine.js?v=4" defer></script>
   <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=3" defer></script>
-  <script src="./game.js?v=3" defer></script>
+  <script src="./puzzles.js?v=4" defer></script>
+  <script src="./game.js?v=4" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -89,7 +89,7 @@
             <label><input type="radio" name="rank" value="hard"><span>困难</span></label>
           </fieldset>
           <div class="settings">
-            <label>节点数 <input id="node-count" type="number" min="4" max="18" step="1" inputmode="numeric" placeholder="自动（6）"></label>
+            <label>节点数 <input id="node-count" type="number" min="4" max="24" step="1" inputmode="numeric" placeholder="自动（6）"></label>
             <label>模式 <select id="mechanism"></select></label>
           </div>
           <button class="primary generate" type="submit"><svg><use href="#i-shuffle"/></svg>生成新题</button>
@@ -102,7 +102,18 @@
             <button data-tool="add" aria-pressed="true">加点</button>
             <button data-tool="edge" aria-pressed="false">连线</button>
             <button data-tool="move" aria-pressed="false">移动</button>
+            <button data-tool="mechanism" aria-pressed="false">机制</button>
             <button data-tool="erase" aria-pressed="false">删除</button>
+          </div>
+          <div id="mechanism-editor" class="settings mechanism-editor" hidden>
+            <label>添加或编辑机制
+              <select id="edit-mechanism">
+                <option value="mirror">反向联动</option><option value="rotor">旋转星盘</option>
+                <option value="rail">共享滑轨</option><option value="fixed">固定点</option>
+                <option value="obstacle">禁行区</option><option value="release">解除机制</option>
+              </select>
+            </label>
+            <button id="apply-mechanism" class="secondary" hidden>完成</button>
           </div>
           <p id="editor-tip" class="editor-tip"></p>
           <div class="actions" id="editor-actions">
@@ -112,8 +123,12 @@
           <div class="quiet" id="edit-quiet">
             <button id="draft-undo"><svg><use href="#i-undo"/></svg>撤销编辑</button>
             <button id="draft-clear"><svg><use href="#i-reset"/></svg>清空棋盘</button>
+            <button id="scramble-draft"><svg><use href="#i-shuffle"/></svg>打乱题目</button>
           </div>
-          <button id="edit-again" class="secondary generate" hidden><svg><use href="#i-pen"/></svg>返回编辑</button>
+          <div id="editing-return" class="actions" hidden>
+            <button id="edit-current" class="primary"><svg><use href="#i-pen"/></svg>编辑当前布局</button>
+            <button id="edit-again" class="secondary">返回原题</button>
+          </div>
           <p class="status" id="editor-status" role="status"></p>
         </section>
 
@@ -143,15 +158,15 @@
     <p>拖动红色节点，消除交叉、重叠和间距冲突。理顺后节点变绿，虚线变为实线。</p>
     <dl class="mechanics">
       <div><dt>固定点 ×</dt><dd>方形锚点保持原位。</dd></div>
-      <div><dt>联动 A / B</dt><dd>同字母的两个节点沿相反方向移动。</dd></div>
-      <div><dt>星盘 R</dt><dd>拖动任一 R 节点，整组绕中心旋转。</dd></div>
-      <div><dt>滑轨</dt><dd>带短划的节点沿轨道滑动。</dd></div>
+      <div><dt>联动 A / B / C</dt><dd>每个字母代表独立的一对，两个节点沿相反方向移动。</dd></div>
+      <div><dt>旋转星盘</dt><dd>同一星盘的节点有相同的 R 编号，拖动一个就会转动整组。</dd></div>
+      <div><dt>共享滑轨</dt><dd>同一条滑轨上的节点各自沿轨道移动。</dd></div>
       <div><dt>禁行区</dt><dd>节点与连线都要和带纹理的圆圈保持距离。</dd></div>
     </dl>
     <p>拖动空白处移动视图，滚轮或 ＋ / − 缩放，按 1 回正。点棋盘右上角的全屏按钮可以扩大视野。键盘可用 Q / E 选择节点、方向键移动。</p>
     <p>「提示一步」会替你走一步。「一键求解」会演示整套动作。两种操作都可以撤销。</p>
     <p>计时在首次移动时自动开始，也可以手动开始或暂停。解开后自动停表。暂停或解开后，仍然可以操作棋盘。</p>
-    <p>自定义题中，点空白处加点，再依次点两个节点连线。可拖动、删除节点或连线，也可直接求解自己画的题。</p>
+    <p>自定义题的「机制」工具可建立多组联动、星盘和共享滑轨。先摆出无冲突布局，再点「打乱题目」，就能得到带已知解的题目。</p>
   </dialog>
 </body>
 </html>

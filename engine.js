@@ -28,18 +28,26 @@
 
   function createLevel(data) {
     const ownership = data.points.map(() => -1);
+    let pairCount = 0;
+    let diskCount = 0;
     const controls = data.controls.map((control, i) => {
       control.members.forEach((node) => { ownership[node] = i; });
       const target = data.points[control.members[0]];
-      if (control.kind === 'rotor') return { ...control, target: [0] };
-      if (control.kind === 'rail') return { ...control, target: [distance(control.a, target) / distance(control.a, control.b)] };
+      if (control.kind === 'rotor') return { ...control, symbol: 'R' + (++diskCount), target: [0] };
+      if (control.kind === 'rail') return { ...control, target: [trackPosition(target, control.a, control.b)] };
       if (control.kind === 'mirror') {
         const other = data.points[control.members[1]];
-        return { ...control, sum: target.map((value, axis) => value + other[axis]), target };
+        return { ...control, symbol: String.fromCharCode(65 + pairCount++), sum: target.map((value, axis) => value + other[axis]), target };
       }
       return { ...control, target };
     });
     return { obstacles: [], ...data, controls, ownership, initial: controls.map(({ start }) => start), witness: controls.map(({ target }) => target) };
+  }
+
+  function trackPosition(point, a, b) {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    return clamp(((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / (dx * dx + dy * dy), 0, 1);
   }
 
   function normalize(control, value) {
@@ -215,5 +223,6 @@
   }
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
-    positions, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail };
+    positions, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
+    trackPosition, interpolate };
 })();

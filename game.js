@@ -10,6 +10,7 @@
   const form = byId('generator');
   const countInput = byId('node-count');
   const mechanism = byId('mechanism');
+  const editMechanism = byId('edit-mechanism');
   const storageKey = 'jiexian-v2';
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const turnKeys = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -18,6 +19,7 @@
     add: '点棋盘空白处添加一个节点。',
     edge: '依次点两个节点，为它们连线。',
     move: '拖动节点调整位置。拖动空白处平移。',
+    mechanism: '',
     erase: '点节点删除它及相连的线，也可以单独点线删除。',
   };
   const twoDigits = (n) => String(n).padStart(2, '0');
@@ -34,7 +36,7 @@
   }
   const validPoint = (point) => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
   const bounded = ([x, y]) => [g.clamp(x, g.margin, g.width - g.margin), g.clamp(y, g.margin, g.height - g.margin)];
-  const emptyDraft = () => ({ points: [], edges: [] });
+  const emptyDraft = () => ({ points: [], edges: [], groups: [], fixed: [], obstacles: [] });
   function readDraft(value) {
     if (!Array.isArray(value?.points) || value.points.length > puzzles.maxNodes || !value.points.every(validPoint) || !Array.isArray(value.edges)) return emptyDraft();
     const edges = [];
@@ -44,13 +46,39 @@
       if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b >= value.points.length || a === b) continue;
       if (!edges.some(([u, v]) => u === a && v === b)) edges.push([a, b]);
     }
-    return { points: value.points.map(bounded), edges };
+    const points = value.points.map(bounded);
+    const validNode = (i) => Number.isInteger(i) && i >= 0 && i < points.length;
+    const fixed = Array.isArray(value.fixed) ? [...new Set(value.fixed.filter(validNode))] : [];
+    const used = new Set(fixed);
+    const groups = [];
+    for (const group of Array.isArray(value.groups) ? value.groups : []) {
+      if (!Array.isArray(group?.members)) continue;
+      const members = [...new Set(group.members)];
+      if (!members.length || members.some((i) => !validNode(i) || used.has(i))) continue;
+      const { kind } = group;
+      if (kind === 'mirror' && members.length === 2) groups.push({ kind, members });
+      else if (kind === 'rotor' && members.length >= 2 && validPoint(group.center) && puzzles.rotorFits(points, members, group.center)) {
+        groups.push({ kind, members, center: group.center });
+      } else if (kind === 'rail' && validPoint(group.a) && validPoint(group.b)) {
+        const a = bounded(group.a);
+        const b = bounded(group.b);
+        if (g.distance(a, b) < 70 || members.some((node) => g.distanceToSegment(points[node], a, b) > .1)) continue;
+        groups.push({ kind, members, a, b });
+      } else continue;
+      members.forEach((id) => used.add(id));
+    }
+    const obstacles = (Array.isArray(value.obstacles) ? value.obstacles : []).slice(0, 8).filter((item) =>
+      validPoint(item?.center) && Number.isFinite(item.r) && item.r >= 24 && item.r <= 96);
+    const answer = Array.isArray(value.answer) && value.answer.length === points.length && value.answer.every(validPoint) ? value.answer : undefined;
+    const spacing = Number.isFinite(value.spacing) && value.spacing > 0 ? Math.min(g.radius, value.spacing) : undefined;
+    return puzzles.rememberAnswer({ points, edges, groups, fixed, obstacles, answer, spacing });
   }
 
   let draft = readDraft(saved.draft);
   const draftHistory = [];
   let activeTool = 'add';
   let editorOrigin = -1;
+  let mechanismDraft = { anchors: [], members: [], index: -1 };
   let tab = 'random';
   let editing = false;
   let randomConfig = null;
@@ -138,22 +166,27 @@
     byId('editor-tip').hidden = !editing;
     byId('editor-actions').hidden = !editing;
     byId('edit-quiet').hidden = !editing;
-    byId('edit-again').hidden = editing;
+    byId('editing-return').hidden = editing;
     byId('session-panel').hidden = editing;
     byId('timer').hidden = editing;
     byId('editor-status').textContent = '';
     setStatus(won ? (assisted ? '本题已辅助解开。' : '本题的连线已经理顺。') : '');
     updatePanel();
+    syncMechanism();
     save();
     render();
   }
 
   function progressText() {
     const meta = `${level.points.length} 个节点 · ${level.edges.length} 条线`;
+    const pairs = level.controls.filter(({ kind }) => kind === 'mirror').length;
+    const disks = level.controls.filter(({ kind }) => kind === 'rotor').length;
+    const rails = new Set(level.controls.filter(({ kind }) => kind === 'rail').map(({ a }) => a)).size;
+    const extras = [pairs && `${pairs} 组联动`, disks && `${disks} 个星盘`, rails && `${rails} 条滑轨`].filter(Boolean);
     const random = tab === 'random';
     byId('level-title').textContent = random ? '随机解线' : '自定义题';
     byId('difficulty-label').textContent = random ? puzzles.difficulty[level.rank].label : editing ? '编辑题目' : '试玩题目';
-    byId('puzzle-meta').textContent = random ? `${puzzles.modes[level.mode].label} · ${meta}` : meta;
+    byId('puzzle-meta').textContent = [...(random ? [puzzles.modes[level.mode].label] : []), meta, ...extras].join(' · ');
     byId('level-rule').textContent = random ? puzzles.modes[level.mode].rule :
       editing ? '自己布置节点和连线，再试玩或求解。' : '拖动红色节点，让冲突连线恢复为实线。';
     board.setAttribute('aria-label', editing ? '自定义题编辑棋盘' : '解线棋盘。用 Q 或 E 选择节点，用方向键移动。');
@@ -193,8 +226,10 @@
     byId('fit').disabled = (view.zoom === 1 && !view.x && !view.y) || dragging;
     byId('draft-undo').disabled = !draftHistory.length || dragging;
     byId('draft-clear').disabled = !draft.points.length || dragging;
+    byId('scramble-draft').disabled = dragging || !draft.edges.length;
     byId('solve-draft').disabled = dragging;
     byId('play-draft').disabled = dragging;
+    byId('edit-current').disabled = busy;
   }
 
   function updateClock() {
@@ -205,6 +240,7 @@
   function refreshCompletion() {
     const complete = g.evaluate(level, g.positions(level, state)).count === 0;
     if (complete && !won) stopClock('finished');
+    if (complete && !level.witness) level.witness = g.copy(state);
     if (!complete && timerMode === 'finished') timerMode = 'paused';
     won = complete;
   }
@@ -237,9 +273,10 @@
   function pickTool(tool) {
     activeTool = tool;
     editorOrigin = -1;
+    mechanismDraft = { anchors: [], members: [], index: -1 };
     board.style.cursor = tool === 'move' ? 'grab' : 'crosshair';
     editButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
-    byId('editor-tip').textContent = tools[tool];
+    syncMechanism();
     byId('editor-status').textContent = '';
     render();
   }
@@ -249,14 +286,16 @@
       draftHistory.push(draft);
       if (draftHistory.length > 120) draftHistory.shift();
     }
-    draft = next;
+    draft = puzzles.rememberAnswer(next);
     level = puzzles.authored(draft);
     state = g.copy(level.initial);
     selection = -1;
     editorOrigin = -1;
+    mechanismDraft = { anchors: [], members: [], index: -1 };
     hover = -1;
     byId('editor-status').textContent = '';
     updatePanel();
+    syncMechanism();
     save();
     render();
   }
@@ -265,8 +304,148 @@
     if (!byId('draft-undo').disabled) replaceDraft(draftHistory.pop(), false);
   }
 
+  function syncMechanism() {
+    const active = editing && activeTool === 'mechanism';
+    byId('mechanism-editor').hidden = !active;
+    const confirm = byId('apply-mechanism');
+    const { anchors, members, index } = mechanismDraft;
+    const kind = editMechanism.value;
+    const grouped = kind === 'rotor' || kind === 'rail';
+    confirm.hidden = !active || !grouped;
+    confirm.textContent = (index < 0 ? '完成' : '保存') + (kind === 'rail' ? '滑轨' : '星盘');
+    confirm.disabled = kind === 'rail' ? anchors.length !== 2 || !members.length : members.length < 2;
+    const tips = {
+      mirror: members.length ? '已选第一个节点，再点一个自由节点建立联动。' : '点两个自由节点建立一组。可以重复建立多组。',
+      rotor: anchors.length ? `已选 ${members.length} 个节点。选至少两个，再确认。` : '点空白处设圆心，或点已建星盘的节点来编辑成员。',
+      rail: anchors.length === 0 ? '点滑轨起点，或点已有滑轨节点来编辑成员。' :
+        anchors.length === 1 ? '再点终点。' : `已选 ${members.length} 个节点。选择节点后确认，它们会吸附到同一条轨道。`,
+      fixed: '点击自由节点切换固定状态。',
+      obstacle: anchors.length ? '再点一个位置确定圆形禁行区的半径。' : '点空白处设禁行区圆心。',
+      release: '点节点解除所在机制，或点禁行区删除它。',
+    };
+    byId('editor-tip').textContent = active ? tips[kind] : tools[activeTool];
+  }
+
+  function editMechanismAt(point, node) {
+    const kind = editMechanism.value;
+    const message = byId('editor-status');
+    const { anchors, members } = mechanismDraft;
+    const groupIndex = draft.groups.findIndex((group) => group.members.includes(node));
+    const fixed = draft.fixed.includes(node);
+    message.textContent = '';
+    if (kind === 'release') {
+      if (fixed) replaceDraft({ ...draft, fixed: draft.fixed.filter((item) => item !== node) });
+      else if (groupIndex >= 0) replaceDraft({ ...draft, groups: draft.groups.filter((_, i) => i !== groupIndex) });
+      else {
+        const obstacle = draft.obstacles.findIndex(({ center, r }) => g.distance(center, point) < r);
+        if (obstacle >= 0) replaceDraft({ ...draft, obstacles: draft.obstacles.filter((_, i) => i !== obstacle) });
+      }
+      return;
+    }
+    if (kind === 'fixed') {
+      if (node < 0) return;
+      if (groupIndex >= 0) { message.textContent = '先解除这个节点原有的机制。'; return; }
+      replaceDraft({ ...draft, fixed: fixed ? draft.fixed.filter((item) => item !== node) : [...draft.fixed, node] });
+      return;
+    }
+    if (kind === 'obstacle') {
+      if (draft.obstacles.length >= 8) { message.textContent = '最多可添加八个禁行区。'; return; }
+      if (!anchors.length) {
+        if (node >= 0) return;
+        anchors.push(bounded(point));
+      } else {
+        const center = anchors[0];
+        const [x, y] = center;
+        const room = Math.min(x, y, g.width - x, g.height - y) - 10;
+        const r = g.clamp(g.distance(center, point), 24, Math.min(96, room));
+        replaceDraft({ ...draft, obstacles: [...draft.obstacles, { center, r }] });
+      }
+      syncMechanism();
+      render();
+      return;
+    }
+    if (kind === 'mirror') {
+      if (node < 0) return;
+      if (fixed || groupIndex >= 0) { message.textContent = '请选择还没有机制的节点。'; return; }
+      if (members.includes(node)) members.length = 0;
+      else if (members.length) replaceDraft({ ...draft, groups: [...draft.groups, { kind, members: [members[0], node] }] });
+      else members.push(node);
+      syncMechanism();
+      render();
+      return;
+    }
+    const needed = kind === 'rotor' ? 1 : 2;
+    if (!anchors.length && groupIndex >= 0 && draft.groups[groupIndex].kind === kind) {
+      const group = draft.groups[groupIndex];
+      mechanismDraft = { anchors: kind === 'rotor' ? [group.center] : [group.a, group.b], members: [...group.members], index: groupIndex };
+    } else if (anchors.length < needed) {
+      const anchor = bounded(point);
+      if (anchors.length && g.distance(anchors[0], anchor) < 74) {
+        message.textContent = '滑轨的两个端点需要离远一些。';
+        return;
+      }
+      anchors.push(anchor);
+    } else if (node >= 0) {
+      if (fixed || groupIndex >= 0 && groupIndex !== mechanismDraft.index) {
+        message.textContent = '请选择自由节点，或先解除它原有的机制。';
+        return;
+      }
+      if (members.includes(node)) members.splice(members.indexOf(node), 1);
+      else if (kind === 'rotor' && !puzzles.rotorFits(draft.points, [node], anchors[0])) {
+        message.textContent = '此节点太靠近圆心，或旋转时会超出棋盘。';
+        return;
+      } else members.push(node);
+    }
+    syncMechanism();
+    render();
+  }
+
+  function applyMechanism() {
+    const { anchors, members, index } = mechanismDraft;
+    const kind = editMechanism.value;
+    const [a, b] = anchors;
+    const points = g.copy(draft.points);
+    const group = { kind, members: [...members] };
+    if (kind === 'rotor') {
+      group.center = a;
+    } else {
+      const length = g.distance(a, b);
+      if (members.length > 1 && (members.length - 1) * 36 > length) {
+        byId('editor-status').textContent = '这条滑轨太短，放不下所选的节点。';
+        return;
+      }
+      group.a = a;
+      group.b = b;
+      const slots = members.map((node) => ({ node, parameter: g.trackPosition(points[node], a, b) }))
+        .sort((x, y) => x.parameter - y.parameter);
+      const collide = slots.some((slot, i) => i && (slot.parameter - slots[i - 1].parameter) * length < 36);
+      slots.forEach(({ node, parameter }, i) => {
+        points[node] = g.interpolate(a, b, collide ? i / (slots.length - 1) : parameter);
+      });
+    }
+    const groups = [...draft.groups];
+    if (index >= 0) groups[index] = group;
+    else groups.push(group);
+    replaceDraft({ ...draft, points, groups });
+  }
+
+  function scrambleDraft() {
+    if (!draft.answer) {
+      byId('editor-status').textContent = '先把节点和线摆成无冲突的布局，再打乱。';
+      return;
+    }
+    const scrambled = puzzles.scrambleDraft(draft, Math.floor(Math.random() * 4294967296));
+    if (!scrambled) {
+      byId('editor-status').textContent = '当前机制下没能打乱题目。可以加一条连线或放开一个节点。';
+      return;
+    }
+    replaceDraft(scrambled);
+    byId('editor-status').textContent = '已打乱，并保留一个有效解。';
+  }
+
   function editAt(point, node) {
     const message = byId('editor-status');
+    if (activeTool === 'mechanism') { editMechanismAt(point, node); return; }
     if (activeTool === 'add') {
       if (node >= 0) { message.textContent = '请选择棋盘空白处。'; return; }
       if (draft.points.length >= puzzles.maxNodes) { message.textContent = `最多可放 ${puzzles.maxNodes} 个节点。`; return; }
@@ -293,10 +472,15 @@
       replaceDraft({ ...draft, edges: [...draft.edges, [a, b]] });
     } else if (activeTool === 'erase') {
       if (node >= 0) {
+        const shift = (n) => n > node ? n - 1 : n;
         const points = draft.points.filter((_, i) => i !== node);
         const edges = draft.edges.filter(([a, b]) => a !== node && b !== node)
-          .map((edge) => edge.map((n) => n > node ? n - 1 : n));
-        replaceDraft({ points, edges });
+          .map((edge) => edge.map(shift));
+        const fixed = draft.fixed.filter((n) => n !== node).map(shift);
+        const groups = draft.groups.map((group) => ({
+          ...group, members: group.members.filter((n) => n !== node).map(shift),
+        })).filter(({ kind, members }) => members.length >= (kind === 'rail' ? 1 : 2));
+        replaceDraft({ ...draft, points, edges, fixed, groups });
       } else {
         let nearest = 11 / transform().k;
         let chosen = -1;
@@ -315,12 +499,14 @@
       return;
     }
     const result = puzzles.solveDraft(draft);
-    if (!result.puzzle) {
+    if (!result.puzzle || (solveNow && !result.puzzle.witness)) {
       byId('editor-status').textContent = result.reason;
       return;
     }
     editing = false;
     load(result.puzzle);
+    syncMechanism();
+    if (result.reason) setStatus(result.reason);
     if (solveNow && !won) animate(false);
   }
 
@@ -335,7 +521,7 @@
   }
 
   function createRandom(rank, count, mode, auto) {
-    const config = { rank, count, mechanism: mode, auto };
+    const config = { rank, count, mechanism: mode, auto, revision: 2 };
     for (let tries = 0; tries < 6; tries++) {
       config.seed = Math.floor(Math.random() * 4294967296);
       if (config.seed !== randomConfig?.seed && randomize(config)) return true;
@@ -346,11 +532,15 @@
   function reflectConfig(config) {
     form.querySelector(`input[value="${config.rank}"]`).checked = true;
     countInput.value = config.auto ? '' : config.count;
-    countInput.placeholder = `自动（${puzzles.difficulty[config.rank].nodes}）`;
+    countInput.placeholder = `自动（${puzzles.defaultCount(config.rank, config.mechanism)}）`;
     mechanism.value = config.mechanism;
   }
 
   function animate(singleStep) {
+    if (!level.witness && !won) {
+      setStatus('暂时没找到符合所有机制的解。返回编辑，摆出无冲突布局后再打乱即可生成有解题。');
+      return;
+    }
     const plan = suggestion ?? g.solve(level, state);
     if (!plan.length) {
       setStatus('连线已经理顺，可以继续拖动节点。');
@@ -526,7 +716,7 @@
       const previous = action.before.state[action.index];
       const changed = g.moveDistance(level.controls[action.index], previous, state[action.index]) >= 2;
       if (event.type === 'pointerup' && changed) {
-        if (editing) replaceDraft({ ...draft, points: g.copy(state) });
+        if (editing) replaceDraft({ ...draft, points: g.positions(level, state) });
         else completeMove(action.before, 1, false);
         return;
       }
@@ -576,7 +766,7 @@
     if (g.moveDistance(control, before.state[index], state[index]) > 0.01) {
       if (editing) {
         const node = selection;
-        replaceDraft({ ...draft, points: g.copy(state) });
+        replaceDraft({ ...draft, points: g.positions(level, state) });
         selection = node;
       } else completeMove(before, 1, false);
     }
@@ -617,16 +807,23 @@
       ctx.stroke();
     };
 
+    const tracks = new Set();
     level.controls.forEach((control) => {
       if (control.kind === 'rotor') {
-        const orbit = g.distance(points[control.members[0]], control.center);
-        circle(control.center, orbit + 29, '#f6f6f4', '#b0b0ab');
+        const orbits = [...new Set(control.members.map((node) => Math.round(g.distance(points[node], control.center) / 6) * 6))];
+        circle(control.center, Math.max(...orbits) + 23, '#f6f6f485', '#b0b0ab');
         ctx.setLineDash([4, 7]);
-        circle(control.center, orbit, null, '#8e8e88');
+        orbits.forEach((orbit) => circle(control.center, orbit, null, '#a3a39d'));
         ctx.setLineDash([]);
-        circle(control.center, 4, '#71716b');
+        circle(control.center, 9 / k, '#fff', '#8e8e88');
+        ctx.font = `700 ${9 / k}px "Segoe UI", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#4b4b49';
+        ctx.fillText(control.symbol, ...control.center);
       }
-      if (control.kind === 'rail') {
+      if (control.kind === 'rail' && !tracks.has(control.a)) {
+        tracks.add(control.a);
         ctx.lineWidth = 5;
         line(control.a, control.b, '#cdcdca');
         circle(control.a, 5, '#81817d');
@@ -646,6 +843,16 @@
       ctx.restore();
     });
 
+    if (editing && activeTool === 'mechanism') {
+      const { anchors } = mechanismDraft;
+      const [a, b] = anchors;
+      if (a) {
+        ctx.lineWidth = 1.5 / k;
+        if (b) line(a, b, '#28536e');
+        anchors.forEach((point) => circle(point, 5 / k, '#fff', '#28536e'));
+      }
+    }
+
     for (const drawBad of [false, true]) {
       ctx.lineWidth = Math.max(2.15, 1.35 / k);
       ctx.setLineDash(drawBad ? [7 / k, 5 / k] : []);
@@ -659,8 +866,9 @@
       const index = level.ownership[node];
       const control = level.controls[index];
       const kind = control?.kind ?? 'fixed';
-      const picked = node === selection || node === editorOrigin || moving?.kind === 'node' && index === moving.index || animation?.index === index;
-      const r = level.radius && level.radius < g.radius ? Math.max(2 / k, level.radius) : Math.max(g.radius, 7.2 / k);
+      const picked = node === selection || node === editorOrigin ||
+        editing && mechanismDraft.members.includes(node) || moving?.kind === 'node' && index === moving.index || animation?.index === index;
+      const r = Math.max(g.radius, 8 / k);
       const color = faults.badNodes.has(node) ? '#c32e37' : '#287646';
       ctx.lineWidth = 1.5 / k;
       if (kind === 'fixed') {
@@ -678,12 +886,17 @@
         circle(point, r, color);
       }
       if (picked || node === hover) circle(point, r + 5 / k, null, picked ? color : '#6b6b66');
-      if (kind === 'free' && !editing) {
+      if (kind === 'rail') {
+        const length = g.distance(control.a, control.b);
+        const dx = (control.b[0] - control.a[0]) / length * r * .52;
+        const dy = (control.b[1] - control.a[1]) / length * r * .52;
+        line([px - dx, py - dy], [px + dx, py + dy], '#fff');
+      } else if (kind === 'free' && !editing) {
         circle(point, Math.min(r * .27, Math.max(3.4, 1.8 / k)), '#fff');
       } else {
-        const label = editing ? String(node + 1) : kind === 'fixed' ? '×' : kind === 'rotor' ? 'R' : kind === 'rail' ? '│' : 'A';
+        const label = kind === 'free' ? String(node + 1) : kind === 'fixed' ? '×' : control.symbol;
         ctx.fillStyle = '#fff';
-        ctx.font = `700 ${Math.max(15, 10 / k)}px "Segoe UI", sans-serif`;
+        ctx.font = `700 ${Math.max(label.length > 1 ? 12 : 15, 9 / k)}px "Segoe UI", sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, px, py);
@@ -708,13 +921,13 @@
 
   form.addEventListener('change', () => {
     const rank = new FormData(form).get('rank');
-    countInput.placeholder = `自动（${puzzles.difficulty[rank].nodes}）`;
+    countInput.placeholder = `自动（${puzzles.defaultCount(rank, mechanism.value)}）`;
   });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const rank = new FormData(form).get('rank');
     const automatic = countInput.value === '';
-    const count = automatic ? puzzles.difficulty[rank].nodes : Number(countInput.value);
+    const count = automatic ? puzzles.defaultCount(rank, mechanism.value) : Number(countInput.value);
     const ok = createRandom(rank, count, mechanism.value, automatic);
     const message = byId('generator-status');
     message.hidden = ok;
@@ -736,7 +949,18 @@
   });
   byId('editor-tab').addEventListener('click', () => { if (tab !== 'editor') enterEditor(); });
   byId('edit-again').addEventListener('click', enterEditor);
+  byId('edit-current').addEventListener('click', () => {
+    const points = g.positions(level, state);
+    const spacing = level.radius;
+    enterEditor();
+    pickTool('move');
+    replaceDraft({ ...draft, points, spacing });
+    byId('editor-status').textContent = '正在编辑刚才的布局。可以撤销编辑以取回原题。';
+  });
   editButtons.forEach((button) => button.addEventListener('click', () => pickTool(button.dataset.tool)));
+  editMechanism.addEventListener('change', () => pickTool('mechanism'));
+  byId('apply-mechanism').addEventListener('click', applyMechanism);
+  byId('scramble-draft').addEventListener('click', scrambleDraft);
   byId('draft-undo').addEventListener('click', undoDraft);
   byId('draft-clear').addEventListener('click', () => replaceDraft(emptyDraft()));
   byId('solve-draft').addEventListener('click', () => startDraft(true));
@@ -780,7 +1004,11 @@
   const config = saved.random?.config;
   const valid = config && Object.hasOwn(puzzles.difficulty, config.rank) && Object.hasOwn(puzzles.modes, config.mechanism) &&
     Number.isInteger(config.count) && config.count >= puzzles.minNodes && config.count <= puzzles.maxNodes && Number.isInteger(config.seed);
-  if (!valid || !randomize(config, saved.random)) createRandom('easy', puzzles.difficulty.easy.nodes, 'classic', true);
+  if (valid && config.revision !== 2) {
+    const count = config.auto ? puzzles.defaultCount(config.rank, config.mechanism) : config.count;
+    createRandom(config.rank, count, config.mechanism, config.auto);
+  } else if (valid) randomize(config, saved.random);
+  if (!randomConfig) createRandom('easy', puzzles.defaultCount('easy', 'classic'), 'classic', true);
   reflectConfig(randomConfig);
   if (initialTab === 'editor') enterEditor();
   resize();

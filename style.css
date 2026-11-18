@@ -115,7 +115,13 @@ h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; l
 .settings input::placeholder { color: var(--dim); }
 .settings input:focus-visible, .settings select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .generate { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 13px; width: 100%; min-height: 41px; border-radius: 9px; font-size: 13px; font-weight: 650; }
-.edit-tools { grid-template-columns: repeat(4, 1fr); margin-bottom: 8px; }
+.edit-tools { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 8px; }
+.mechanism-editor { grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin-bottom: 10px; }
+#apply-mechanism { min-height: 38px; border-radius: 8px; padding: 0 11px; font-size: 12px; }
+#edit-quiet { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
+#edit-quiet button { font-size: 11px; gap: 3px; }
+#edit-quiet svg { width: 13px; height: 13px; }
+#editing-return { margin-top: 12px; }
 .editor-tip { margin: 0 0 13px; min-height: 32px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 #editor-status:not(:empty), #generator-status:not(:empty) { color: var(--text); }
 
