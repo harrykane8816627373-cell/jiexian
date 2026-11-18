@@ -2,28 +2,61 @@
   'use strict';
 
   const g = globalThis.Jiexian;
+  const puzzles = globalThis.JiexianPuzzles;
   const byId = (id) => document.getElementById(id);
   const board = byId('board');
   const ctx = board.getContext('2d');
   const status = byId('status');
-  const storageKey = 'jiexian-v1';
+  const form = byId('generator');
+  const countInput = byId('node-count');
+  const mechanism = byId('mechanism');
+  const storageKey = 'jiexian-v2';
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const turnKeys = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const labels = { free: '自由节点', mirror: '联动节点', rotor: '星盘节点', rail: '滑轨节点' };
-  const params = new URLSearchParams(location.search);
+  const tools = {
+    add: '点棋盘空白处添加一个节点。',
+    edge: '依次点两个节点，为它们连线。',
+    move: '拖动节点调整位置。拖动空白处平移。',
+    erase: '点节点删除它及相连的线，也可以单独点线删除。',
+  };
   const twoDigits = (n) => String(n).padStart(2, '0');
+  const clockText = (ms) => {
+    const seconds = Math.floor(ms / 1000);
+    return `${twoDigits(Math.floor(seconds / 60))}:${twoDigits(seconds % 60)}`;
+  };
 
-  let saved = { runs: {}, records: {}, chapter: 0 };
+  let saved = {};
   try {
-    const previous = JSON.parse(localStorage.getItem(storageKey));
-    if (previous?.runs && previous?.records) saved = previous;
+    saved = JSON.parse(localStorage.getItem(storageKey)) ?? {};
   } catch {
-    // The game also works in browsers that disable storage.
+    // The game also works with local storage blocked.
+  }
+  const validPoint = (point) => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
+  const bounded = ([x, y]) => [g.clamp(x, g.margin, g.width - g.margin), g.clamp(y, g.margin, g.height - g.margin)];
+  const emptyDraft = () => ({ points: [], edges: [] });
+  function readDraft(value) {
+    if (!Array.isArray(value?.points) || value.points.length > puzzles.maxNodes || !value.points.every(validPoint) || !Array.isArray(value.edges)) return emptyDraft();
+    const edges = [];
+    for (const edge of value.edges) {
+      if (!Array.isArray(edge) || edge.length !== 2) continue;
+      const [a, b] = [...edge].sort((x, y) => x - y);
+      if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b >= value.points.length || a === b) continue;
+      if (!edges.some(([u, v]) => u === a && v === b)) edges.push([a, b]);
+    }
+    return { points: value.points.map(bounded), edges };
   }
 
-  let mode = params.get('mode') === 'daily' ? 'daily' : 'classic';
-  let chapter = Number.isInteger(saved.chapter) ? g.clamp(saved.chapter, 0, g.levels.length - 1) : 0;
-  let level, state, moves, assisted, elapsed, clockStart, won;
+  let draft = readDraft(saved.draft);
+  const draftHistory = [];
+  let activeTool = 'add';
+  let editorOrigin = -1;
+  let tab = 'random';
+  let editing = false;
+  let randomConfig = null;
+  let level, state, moves, assisted, elapsed, won;
+  let clockStart = null;
+  let timerMode = 'idle';
   let history = [];
   let moving = null;
   let selection = -1;
@@ -34,13 +67,8 @@
   let size = { w: 0, h: 0, dpr: 1 };
   let frame = 0;
 
-  const levelButtons = g.levels.map((item, i) => {
-    const button = document.createElement('button');
-    button.textContent = twoDigits(i + 1);
-    button.addEventListener('click', () => { if (i !== chapter) load('classic', i); });
-    byId('level-picker').append(button);
-    return button;
-  });
+  for (const [value, { label }] of Object.entries(puzzles.modes)) mechanism.add(new Option(label, value));
+  const editButtons = [...byId('edit-tools').querySelectorAll('button')];
 
   function setStatus(message) {
     if (status.textContent !== message) status.textContent = message;
@@ -50,97 +78,95 @@
     return elapsed + (clockStart === null ? 0 : performance.now() - clockStart);
   }
 
+  function startClock() {
+    if (timerMode === 'idle' || timerMode === 'paused') {
+      clockStart = performance.now();
+      timerMode = 'running';
+      updateControls();
+    }
+  }
+
+  function stopClock(nextMode) {
+    elapsed = timeSpent();
+    clockStart = null;
+    timerMode = nextMode;
+  }
+
   function save() {
     if (!level) return;
-    saved.chapter = chapter;
-    saved.runs[level.id] = { state: moving?.kind === 'node' ? moving.before.state : state, moves, assisted, elapsed: timeSpent() };
-    const obsolete = Object.keys(saved.runs).filter((key) => key.startsWith('daily-')).sort().slice(0, -35);
-    for (const key of obsolete) {
-      delete saved.runs[key];
-      delete saved.records[key];
+    saved.draft = draft;
+    saved.tab = tab;
+    if (tab === 'random') {
+      const stable = moving?.kind === 'node' ? moving.before.state : state;
+      saved.random = { config: randomConfig, state: stable, moves, assisted, elapsed: timeSpent(), timerMode };
     }
     try {
       localStorage.setItem(storageKey, JSON.stringify(saved));
     } catch {
-      // A full or disabled storage area does not interrupt play.
+      // A full storage area does not interrupt play.
     }
   }
 
   function currentSnapshot() { return { state: g.copy(state), moves, assisted }; }
 
-  function load(nextMode, nextChapter = chapter, keepRun = true) {
-    if (keepRun) save();
+  function load(next, run) {
     animation = null;
     suggestion = null;
     moving = null;
     board.classList.remove('dragging');
-    mode = nextMode;
-    chapter = nextChapter;
-    level = mode === 'classic' ? g.levels[chapter] : g.dailyLevel(g.dayKey());
-    const run = keepRun ? saved.runs[level.id] : null;
+    board.style.cursor = '';
+    level = next;
     const usable = Array.isArray(run?.state) && run.state.length === level.controls.length && run.state.every((part, i) =>
       Array.isArray(part) && part.length === level.controls[i].start.length && part.every(Number.isFinite));
     state = usable ? run.state.map((value, i) => g.normalize(level.controls[i], value)) : g.copy(level.initial);
     moves = usable && Number.isSafeInteger(run.moves) && run.moves >= 0 ? run.moves : 0;
     assisted = usable && run.assisted === true;
     elapsed = usable && Number.isFinite(run.elapsed) && run.elapsed >= 0 ? run.elapsed : 0;
-    won = g.evaluate(level, g.positions(level, state)).count === 0;
-    clockStart = moves && !won ? performance.now() : null;
+    won = !editing && g.evaluate(level, g.positions(level, state)).count === 0;
+    timerMode = won ? 'finished' : usable && ['paused', 'running'].includes(run.timerMode) ? run.timerMode : 'idle';
+    clockStart = timerMode === 'running' ? performance.now() : null;
     history = [];
     view = { x: 0, y: 0, zoom: 1 };
     selection = -1;
+    editorOrigin = -1;
     hover = -1;
-    byId('classic').setAttribute('aria-pressed', String(mode === 'classic'));
-    byId('daily').setAttribute('aria-pressed', String(mode === 'daily'));
-    byId('level-index').textContent = mode === 'classic' ? `关卡 ${twoDigits(chapter + 1)} / ${twoDigits(g.levels.length)}` : level.date.replaceAll('-', '.');
-    byId('category').textContent = level.category;
-    byId('level-title').textContent = level.title;
-    byId('level-rule').textContent = level.rule;
-    byId('chapter-panel').hidden = mode !== 'classic';
-    byId('daily-panel').hidden = mode !== 'daily';
-    board.setAttribute('aria-label', `${level.title}棋盘。用 Q 或 E 选择节点，用方向键移动。`);
-    if (level.date) {
-      byId('daily-date').textContent = level.date.slice(5).replace('-', ' / ');
-      byId('daily-goal').textContent = `在 ${level.goal} 步内独立解开，达成今日目标。每天北京时间 00:00 换题。`;
-    }
-    if (mode === 'daily') params.set('mode', 'daily');
-    else params.delete('mode');
-    if (location.protocol !== 'file:') {
-      const query = params.toString();
-      window.history.replaceState(null, '', location.pathname + (query ? `?${query}` : '') + location.hash);
-    }
-    setStatus(won ? (assisted ? '本局已辅助解开。' : '本局已独立解开。') : '');
+    byId('random-tab').setAttribute('aria-pressed', String(tab === 'random'));
+    byId('editor-tab').setAttribute('aria-pressed', String(tab === 'editor'));
+    byId('generator').hidden = tab !== 'random';
+    byId('editor-panel').hidden = tab !== 'editor';
+    byId('edit-tools').hidden = !editing;
+    byId('editor-tip').hidden = !editing;
+    byId('editor-actions').hidden = !editing;
+    byId('edit-quiet').hidden = !editing;
+    byId('edit-again').hidden = editing;
+    byId('session-panel').hidden = editing;
+    byId('timer').hidden = editing;
+    byId('editor-status').textContent = '';
+    setStatus(won ? (assisted ? '本题已辅助解开。' : '本题的连线已经理顺。') : '');
     updatePanel();
     save();
     render();
   }
 
+  function progressText() {
+    const meta = `${level.points.length} 个节点 · ${level.edges.length} 条线`;
+    const random = tab === 'random';
+    byId('level-title').textContent = random ? '随机解线' : '自定义题';
+    byId('difficulty-label').textContent = random ? puzzles.difficulty[level.rank].label : editing ? '编辑题目' : '试玩题目';
+    byId('puzzle-meta').textContent = random ? `${puzzles.modes[level.mode].label} · ${meta}` : meta;
+    byId('level-rule').textContent = random ? puzzles.modes[level.mode].rule :
+      editing ? '自己布置节点和连线，再试玩或求解。' : '拖动圆点，让虚线恢复为绿色实线。';
+    board.setAttribute('aria-label', editing ? '自定义题编辑棋盘' : '解线棋盘。用 Q 或 E 选择节点，用方向键移动。');
+    byId('anchor-legend').hidden = !level.ownership.includes(-1);
+    byId('board-help').textContent = editing ? '滚轮缩放 · 选择「移动」可平移' : '拖动空白处平移 · 滚轮缩放 · 键盘用 Q / E 选点';
+    byId('draft-count').textContent = `${draft.points.length} / ${puzzles.maxNodes} 个节点`;
+  }
+
   function updatePanel() {
-    const record = saved.records[level.id];
-    const independent = g.levels.filter(({ id }) => Number.isInteger(saved.records[id]?.best)).length;
-    const cleared = g.levels.filter(({ id }) => saved.records[id]).length;
-    const dailyBest = Number.isInteger(record?.best) ? record.best : null;
-    byId('progress-label').textContent = mode === 'classic' ? '独立通关' : '今日目标';
-    byId('progress-text').textContent = mode === 'classic' ? `${independent} / ${g.levels.length}` : dailyBest === null ? '待完成' : dailyBest <= level.goal ? '已达成' : `最佳 ${dailyBest} 步`;
-    byId('progress').max = mode === 'classic' ? g.levels.length : 1;
-    byId('progress').value = mode === 'classic' ? independent : dailyBest !== null && dailyBest <= level.goal ? 1 : 0;
-    byId('chapter-detail').textContent = `已解开 ${cleared} / ${g.levels.length}`;
-    byId('daily-best').textContent = dailyBest === null ? '—' : `${dailyBest} 步`;
-    g.levels.forEach((item, i) => {
-      const button = levelButtons[i];
-      const progress = saved.records[item.id];
-      button.classList.toggle('recorded', Number.isInteger(progress?.best));
-      button.classList.toggle('assisted', !!progress && !Number.isInteger(progress.best));
-      const description = progress ? Number.isInteger(progress.best) ? `独立最佳 ${progress.best} 步` : '已辅助解开' : '未解开';
-      button.setAttribute('aria-label', `第 ${i + 1} 关 ${item.title}，${description}`);
-      button.title = `${item.title} · ${description}`;
-      if (i === chapter) button.setAttribute('aria-current', 'step');
-      else button.removeAttribute('aria-current');
-    });
+    progressText();
     byId('win').hidden = !won;
-    byId('win-title').textContent = assisted ? '已辅助解开' : '解线成功';
-    byId('win-detail').textContent = `${moves} 步${level.date && !assisted && moves <= level.goal ? ' · 达成今日目标' : ''}`;
-    byId('next').hidden = mode !== 'classic' || chapter >= g.levels.length - 1;
+    byId('win-title').textContent = assisted ? '已辅助解开' : moves ? '解线成功' : '连线已经理顺';
+    byId('win-detail').textContent = `${moves} 步 · ${clockText(timeSpent())}`;
     updateStats(g.evaluate(level, g.positions(level, state)).count);
     updateControls();
     updateClock();
@@ -155,19 +181,27 @@
   }
 
   function updateControls() {
-    const busy = !!animation || moving?.kind === 'node';
-    byId('solve').disabled = won || busy;
-    byId('hint').disabled = won || busy;
-    byId('undo').disabled = !history.length || busy;
-    byId('restart').disabled = !moves || busy;
-    byId('zoom-out').disabled = view.zoom <= 0.75 || moving?.kind === 'node';
-    byId('zoom-in').disabled = view.zoom >= 2.8 || moving?.kind === 'node';
-    byId('fit').disabled = (view.zoom === 1 && !view.x && !view.y) || moving?.kind === 'node';
+    const dragging = moving?.kind === 'node';
+    const busy = !!animation || dragging;
+    const paused = timerMode === 'paused';
+    byId('solve').disabled = won || busy || paused;
+    byId('hint').disabled = won || busy || paused;
+    byId('undo').disabled = !history.length || busy || paused;
+    byId('restart').disabled = busy || (!moves && timerMode === 'idle');
+    byId('timer-toggle').disabled = won || busy;
+    byId('timer-toggle').textContent = timerMode === 'running' ? '暂停' : paused ? '继续' : won ? '已结束' : '开始';
+    byId('paused').hidden = !paused || editing;
+    byId('zoom-out').disabled = view.zoom <= 0.75 || dragging;
+    byId('zoom-in').disabled = view.zoom >= 2.8 || dragging;
+    byId('fit').disabled = (view.zoom === 1 && !view.x && !view.y) || dragging;
+    byId('draft-undo').disabled = !draftHistory.length || dragging;
+    byId('draft-clear').disabled = !draft.points.length || dragging;
+    byId('solve-draft').disabled = dragging;
+    byId('play-draft').disabled = dragging;
   }
 
   function updateClock() {
-    const seconds = Math.floor(timeSpent() / 1000);
-    const text = `${Math.floor(seconds / 60)}:${twoDigits(seconds % 60)}`;
+    const text = clockText(timeSpent());
     if (byId('clock').textContent !== text) byId('clock').textContent = text;
   }
 
@@ -177,16 +211,10 @@
     if (!helpUsed) suggestion = null;
     moves += count;
     assisted ||= helpUsed;
-    clockStart ??= performance.now();
+    startClock();
     won = g.evaluate(level, g.positions(level, state)).count === 0;
-    if (won) {
-      elapsed = timeSpent();
-      clockStart = null;
-      const record = saved.records[level.id] ?? {};
-      if (!assisted) record.best = Math.min(moves, record.best ?? Infinity);
-      saved.records[level.id] = record;
-    }
-    setStatus(won ? (assisted ? '本局已辅助解开。' : '本局已独立解开。') : message);
+    if (won) stopClock('finished');
+    setStatus(won ? (assisted ? '本题已辅助解开。' : '本题已独立解开。') : message);
     updatePanel();
     save();
     render();
@@ -196,8 +224,10 @@
     if (byId('undo').disabled) return;
     ({ state, moves, assisted } = history.pop());
     suggestion = null;
-    if (won && moves) clockStart = performance.now();
-    if (!moves) { clockStart = null; elapsed = 0; }
+    if (won) {
+      timerMode = 'idle';
+      startClock();
+    }
     won = false;
     setStatus('已撤销上一次操作。');
     updatePanel();
@@ -205,9 +235,126 @@
     render();
   }
 
+  function pickTool(tool) {
+    activeTool = tool;
+    editorOrigin = -1;
+    board.style.cursor = tool === 'move' ? 'grab' : 'crosshair';
+    editButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
+    byId('editor-tip').textContent = tools[tool];
+    byId('editor-status').textContent = '';
+    render();
+  }
+
+  function replaceDraft(next, remember = true) {
+    if (remember) {
+      draftHistory.push(draft);
+      if (draftHistory.length > 120) draftHistory.shift();
+    }
+    draft = next;
+    level = puzzles.authored(draft);
+    state = g.copy(level.initial);
+    selection = -1;
+    editorOrigin = -1;
+    hover = -1;
+    byId('editor-status').textContent = '';
+    updatePanel();
+    save();
+    render();
+  }
+
+  function undoDraft() {
+    if (!byId('draft-undo').disabled) replaceDraft(draftHistory.pop(), false);
+  }
+
+  function editAt(point, node) {
+    const message = byId('editor-status');
+    if (activeTool === 'add') {
+      if (node >= 0) { message.textContent = '请选择棋盘空白处。'; return; }
+      if (draft.points.length >= puzzles.maxNodes) { message.textContent = `最多可放 ${puzzles.maxNodes} 个节点。`; return; }
+      const place = bounded(point);
+      if (draft.points.some((other) => g.distance(place, other) < g.radius * 2 + 5)) {
+        message.textContent = '请与已有节点留一点距离。';
+        return;
+      }
+      replaceDraft({ ...draft, points: [...draft.points, place] });
+    } else if (activeTool === 'edge' && node >= 0) {
+      if (editorOrigin < 0 || editorOrigin === node) {
+        editorOrigin = editorOrigin === node ? -1 : node;
+        message.textContent = editorOrigin < 0 ? '' : `已选节点 ${node + 1}，请选择另一个节点。`;
+        render();
+        return;
+      }
+      const [a, b] = [editorOrigin, node].sort((x, y) => x - y);
+      if (draft.edges.some(([u, v]) => u === a && v === b)) {
+        message.textContent = '这两个节点已经连线。';
+        editorOrigin = -1;
+        render();
+        return;
+      }
+      replaceDraft({ ...draft, edges: [...draft.edges, [a, b]] });
+    } else if (activeTool === 'erase') {
+      if (node >= 0) {
+        const points = draft.points.filter((_, i) => i !== node);
+        const edges = draft.edges.filter(([a, b]) => a !== node && b !== node)
+          .map((edge) => edge.map((n) => n > node ? n - 1 : n));
+        replaceDraft({ points, edges });
+      } else {
+        let nearest = 11 / transform().k;
+        let chosen = -1;
+        draft.edges.forEach(([a, b], i) => {
+          const distance = g.distanceToSegment(point, draft.points[a], draft.points[b]);
+          if (distance < nearest) { nearest = distance; chosen = i; }
+        });
+        if (chosen >= 0) replaceDraft({ ...draft, edges: draft.edges.filter((_, i) => i !== chosen) });
+      }
+    }
+  }
+
+  function startDraft(solveNow) {
+    if (!draft.edges.length) {
+      byId('editor-status').textContent = '请先放置节点并添加至少一条连线。';
+      return;
+    }
+    const result = puzzles.solveDraft(draft);
+    if (!result.puzzle) {
+      byId('editor-status').textContent = result.reason;
+      return;
+    }
+    editing = false;
+    load(result.puzzle);
+    if (solveNow && !won) animate(false);
+  }
+
+  function randomize(config, run) {
+    const stage = puzzles.generate(config.seed, config.rank, config.count, config.mechanism);
+    if (!stage) return false;
+    randomConfig = config;
+    tab = 'random';
+    editing = false;
+    load(stage, run);
+    return true;
+  }
+
+  function createRandom(rank, count, mode, auto) {
+    const config = { rank, count, mechanism: mode, auto };
+    for (let tries = 0; tries < 6; tries++) {
+      config.seed = Math.floor(Math.random() * 4294967296);
+      if (config.seed !== randomConfig?.seed && randomize(config)) return true;
+    }
+    return false;
+  }
+
+  function reflectConfig(config) {
+    form.querySelector(`input[value="${config.rank}"]`).checked = true;
+    countInput.value = config.auto ? '' : config.count;
+    countInput.placeholder = `自动（${puzzles.difficulty[config.rank].nodes}）`;
+    mechanism.value = config.mechanism;
+  }
+
   function animate(singleStep) {
     const plan = suggestion ?? g.solve(level, state);
     if (!plan.length) return;
+    startClock();
     const steps = singleStep ? plan.slice(0, 1) : plan;
     const before = currentSnapshot();
     const playback = { state: g.copy(state), index: steps[0].index };
@@ -280,7 +427,7 @@
   function hitTest(point, touch) {
     const { k } = transform();
     let found = -1;
-    let nearest = Math.max(g.radius + 8, (touch ? 19 : 15) / k);
+    let nearest = Math.max((level.radius ?? g.radius) + 8, (touch ? 19 : 15) / k);
     g.positions(level, state).forEach((node, i) => {
       const d = g.distance(node, point);
       if (d >= nearest) return;
@@ -291,10 +438,14 @@
   }
 
   board.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || moving || animation) return;
+    if (event.button !== 0 || moving || animation || timerMode === 'paused') return;
     const at = local(event);
     const point = toWorld(at);
     const node = hitTest(point, event.pointerType === 'touch');
+    if (editing && activeTool !== 'move') {
+      editAt(point, node);
+      return;
+    }
     if (node !== -1 && level.ownership[node] === -1) {
       setStatus('这个锚点固定在原位。');
       return;
@@ -321,7 +472,7 @@
       const found = hitTest(point, false);
       if (hover === found) return;
       hover = found;
-      board.style.cursor = hover !== -1 && level.ownership[hover] === -1 ? 'default' : 'grab';
+      board.style.cursor = editing && activeTool !== 'move' ? 'crosshair' : hover !== -1 && level.ownership[hover] === -1 ? 'default' : 'grab';
     } else if (moving.id === event.pointerId) {
       if (moving.kind === 'pan') {
         view.x = g.clamp(moving.x + at[0] - moving.at[0], -size.w * .75, size.w * .75);
@@ -330,6 +481,7 @@
       } else {
         const { node, index, before } = moving;
         state[index] = g.dragValue(level, node, point, before.state[index], moving.point);
+        if (!editing && g.moveDistance(level.controls[index], before.state[index], state[index]) >= 2) startClock();
       }
     }
     render();
@@ -344,7 +496,8 @@
       const previous = action.before.state[action.index];
       const changed = g.moveDistance(level.controls[action.index], previous, state[action.index]) >= 2;
       if (event.type === 'pointerup' && changed) {
-        completeMove(action.before, 1, false);
+        if (editing) replaceDraft({ ...draft, points: g.copy(state) });
+        else completeMove(action.before, 1, false);
         return;
       }
       state[action.index] = previous;
@@ -363,14 +516,17 @@
 
   board.addEventListener('keydown', (event) => {
     const key = event.key.toLowerCase();
-    if (event.ctrlKey || event.metaKey || event.altKey || animation || moving || won) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || animation || moving || won || timerMode === 'paused') return;
     if (key === 'q' || key === 'e') {
       event.preventDefault();
       const order = level.ownership.map((index, node) => index < 0 ? -1 : node).filter((node) => node >= 0);
+      if (!order.length) return;
       const i = order.indexOf(selection);
       selection = i < 0 ? order[key === 'q' ? order.length - 1 : 0] : order[(i + order.length + (key === 'q' ? -1 : 1)) % order.length];
       const control = level.controls[level.ownership[selection]];
-      setStatus(`选中 ${labels[control.kind]} ${selection + 1}，按方向键移动。`);
+      const description = `选中 ${labels[control.kind]} ${selection + 1}，按方向键移动。`;
+      if (editing) byId('editor-status').textContent = description;
+      else setStatus(description);
       render();
       return;
     }
@@ -387,7 +543,13 @@
       const target = point.map((value, axis) => value + direction[axis] * (event.shiftKey ? 32 : 9));
       state[index] = g.dragValue(level, selection, target, state[index], point);
     }
-    if (g.moveDistance(control, before.state[index], state[index]) > 0.01) completeMove(before, 1, false);
+    if (g.moveDistance(control, before.state[index], state[index]) > 0.01) {
+      if (editing) {
+        const node = selection;
+        replaceDraft({ ...draft, points: g.copy(state) });
+        selection = node;
+      } else completeMove(before, 1, false);
+    }
   });
   board.addEventListener('blur', () => { selection = -1; render(); });
 
@@ -462,21 +624,13 @@
       });
     }
     ctx.setLineDash([]);
-    for (const point of faults.crosses) {
-      const r = Math.max(5.2, 3.8 / k);
-      ctx.lineWidth = 1.1 / k;
-      circle(point, r, '#2d2447', '#c8a8ff');
-      line([point[0] - r * .36, point[1] - r * .36], [point[0] + r * .36, point[1] + r * .36], '#e5d4ff');
-      line([point[0] + r * .36, point[1] - r * .36], [point[0] - r * .36, point[1] + r * .36], '#e5d4ff');
-    }
-
     points.forEach((point, node) => {
       const [px, py] = point;
       const index = level.ownership[node];
       const control = level.controls[index];
       const kind = control?.kind ?? 'fixed';
-      const picked = node === selection || moving?.kind === 'node' && index === moving.index || animation?.index === index;
-      const r = Math.max(g.radius, 7.2 / k);
+      const picked = node === selection || node === editorOrigin || moving?.kind === 'node' && index === moving.index || animation?.index === index;
+      const r = level.radius && level.radius < g.radius ? Math.max(2 / k, level.radius) : Math.max(g.radius, 7.2 / k);
       const color = faults.badNodes.has(node) ? '#c4a3ff' : '#91f2c5';
       ctx.lineWidth = 1.5 / k;
       if (picked || node === hover) circle(point, r + 6 / k, null, picked ? color : '#a8aeca');
@@ -491,10 +645,10 @@
         circle(point, r + 3.5 / k, faults.badNodes.has(node) ? '#a67df332' : '#69e2ae2b');
         circle(point, r, '#202238', color);
       }
-      if (kind === 'free') {
-        circle(point, Math.max(4.2, 2.5 / k), color);
+      if (kind === 'free' && !editing) {
+        circle(point, Math.min(r * .42, Math.max(4.2, 2.5 / k)), color);
       } else {
-        const label = kind === 'fixed' ? '×' : kind === 'rotor' ? 'R' : kind === 'rail' ? '│' : control.members[0] === 0 ? 'A' : 'B';
+        const label = editing ? String(node + 1) : kind === 'fixed' ? '×' : kind === 'rotor' ? 'R' : kind === 'rail' ? '│' : 'A';
         ctx.fillStyle = kind === 'rotor' ? '#f8ca8a' : kind === 'rail' ? '#afcbff' : kind === 'fixed' ? '#cbd5ec' : color;
         ctx.font = `700 ${Math.max(15, 10 / k)}px "Segoe UI", sans-serif`;
         ctx.textAlign = 'center';
@@ -519,35 +673,76 @@
     render();
   }
 
-  byId('classic').addEventListener('click', () => { if (mode !== 'classic') load('classic'); });
-  byId('daily').addEventListener('click', () => { if (mode !== 'daily' || level.date !== g.dayKey()) load('daily'); });
+  form.addEventListener('change', () => {
+    const rank = new FormData(form).get('rank');
+    countInput.placeholder = `自动（${puzzles.difficulty[rank].nodes}）`;
+  });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const rank = new FormData(form).get('rank');
+    const automatic = countInput.value === '';
+    const count = automatic ? puzzles.difficulty[rank].nodes : Number(countInput.value);
+    const ok = createRandom(rank, count, mechanism.value, automatic);
+    const message = byId('generator-status');
+    message.hidden = ok;
+    message.textContent = ok ? '' : '这次没能生成可解的布局，请再试一次。';
+    if (ok) setStatus('已生成新题。');
+  });
+  function enterEditor() {
+    save();
+    tab = 'editor';
+    editing = true;
+    load(puzzles.authored(draft));
+    pickTool(activeTool);
+  }
+  byId('random-tab').addEventListener('click', () => {
+    if (tab === 'random') return;
+    save();
+    if (saved.random && randomize(saved.random.config, saved.random)) return;
+    createRandom('easy', puzzles.difficulty.easy.nodes, 'classic', true);
+  });
+  byId('editor-tab').addEventListener('click', () => { if (tab !== 'editor') enterEditor(); });
+  byId('edit-again').addEventListener('click', enterEditor);
+  editButtons.forEach((button) => button.addEventListener('click', () => pickTool(button.dataset.tool)));
+  byId('draft-undo').addEventListener('click', undoDraft);
+  byId('draft-clear').addEventListener('click', () => replaceDraft(emptyDraft()));
+  byId('solve-draft').addEventListener('click', () => startDraft(true));
+  byId('play-draft').addEventListener('click', () => startDraft(false));
   byId('rules').addEventListener('click', () => byId('rules-dialog').showModal());
   byId('solve').addEventListener('click', () => animate(false));
   byId('hint').addEventListener('click', () => animate(true));
   byId('undo').addEventListener('click', undo);
-  byId('restart').addEventListener('click', () => { load(mode, chapter, false); setStatus('已重开本局。'); });
-  byId('next').addEventListener('click', () => load('classic', chapter + 1));
+  byId('restart').addEventListener('click', () => { load(level); setStatus('已重开本题。'); });
+  byId('timer-toggle').addEventListener('click', () => {
+    if (timerMode === 'running') stopClock('paused');
+    else startClock();
+    updateControls();
+    updateClock();
+    save();
+  });
   byId('zoom-in').addEventListener('click', () => zoom(1.24));
   byId('zoom-out').addEventListener('click', () => zoom(1 / 1.24));
   byId('fit').addEventListener('click', resetView);
   document.addEventListener('keydown', (event) => {
     if (byId('rules-dialog').open) return;
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !byId('undo').disabled) {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
       event.preventDefault();
-      undo();
+      if (editing) undoDraft();
+      else undo();
     }
     if (!event.ctrlKey && !event.metaKey && event.key === '1') resetView();
   });
   window.addEventListener('pagehide', save);
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) save();
-    else if (mode === 'daily' && !moving && !animation && level.date !== g.dayKey()) load('daily');
-  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
   setInterval(updateClock, 250);
-  setInterval(() => {
-    if (mode === 'daily' && !moving && !animation && level.date !== g.dayKey()) load('daily');
-  }, 15000);
   new ResizeObserver(resize).observe(board);
-  load(mode);
+  const initialTab = saved.tab;
+  const config = saved.random?.config;
+  const valid = config && Object.hasOwn(puzzles.difficulty, config.rank) && Object.hasOwn(puzzles.modes, config.mechanism) &&
+    Number.isInteger(config.count) && config.count >= puzzles.minNodes && config.count <= puzzles.maxNodes && Number.isInteger(config.seed);
+  if (!valid || !randomize(config, saved.random)) createRandom('easy', puzzles.difficulty.easy.nodes, 'classic', true);
+  reflectConfig(randomConfig);
+  if (initialTab === 'editor') enterEditor();
   resize();
 })();

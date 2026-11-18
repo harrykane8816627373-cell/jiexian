@@ -42,13 +42,13 @@ main { width: min(1260px, calc(100% - 80px)); margin: 0 auto; padding: 34px 0 36
 .label-dot { width: 4px; height: 4px; border-radius: 50%; background: #678983; }
 h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; letter-spacing: .055em; font-weight: 750; }
 .intro p { margin: 0; color: var(--muted); line-height: 1.6; font-size: 14px; }
-.progress-summary { width: 205px; flex: none; margin-bottom: 2px; }
-.progress-summary div { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: 12px; }
-.progress-summary strong { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
-.progress-summary progress { appearance: none; display: block; width: 100%; height: 5px; margin-top: 9px; border: 0; border-radius: 999px; overflow: hidden; background: #292d42; color: var(--mint); }
-progress::-webkit-progress-bar { background: #292d42; }
-progress::-webkit-progress-value { background: var(--mint); border-radius: 999px; }
-progress::-moz-progress-bar { background: var(--mint); }
+.timer { display: flex; align-items: center; gap: 12px; flex: none; padding: 9px 10px 9px 13px; background: #181b28; border: 1px solid var(--border); border-radius: 13px; }
+.timer > svg { width: 20px; height: 20px; fill: none; stroke: var(--mint); stroke-width: 1.6; stroke-linecap: round; }
+.timer span, .timer strong { display: block; }
+.timer span { color: var(--muted); font-size: 11px; }
+.timer strong { margin-top: 2px; font: 650 24px/1 "Cascadia Mono", Consolas, monospace; }
+.timer button { min-width: 56px; min-height: 36px; margin-left: 3px; border: 1px solid #3d435a; border-radius: 8px; background: #22263a; color: #d6daed; font-size: 12px; }
+.timer button:hover:not(:disabled) { background: #30344d; }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 22px; align-items: start; }
 .board-card, .panel { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; }
@@ -77,12 +77,13 @@ progress::-moz-progress-bar { background: var(--mint); }
 .win strong, .win span { display: block; }
 .win strong { color: var(--mint); font-size: 14px; }
 .win span { margin-top: 3px; font-size: 11px; color: #bfd4d2; }
-.win button { background: var(--mint); color: #14231e; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; padding: 7px 10px; font-size: 12px; font-weight: 700; min-height: 36px; white-space: nowrap; }
+.paused { position: absolute; inset: 0; display: grid; place-items: center; background: #0f111acc; color: var(--text); font-size: 18px; font-weight: 700; pointer-events: none; }
+.view-tools { z-index: 1; }
 
 .sidebar { display: grid; gap: 16px; }
 .panel { padding: 18px; }
 .panel h2 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .04em; }
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); margin: 16px 0; gap: 7px; }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); margin: 14px 0; gap: 8px; }
 .stats > div { min-width: 0; background: #121522; border: 1px solid #292d40; border-radius: 11px; text-align: center; padding: 11px 2px 10px; }
 .stats strong { display: block; font-family: "Cascadia Mono", "Consolas", monospace; font-size: clamp(19px, 2vw, 26px); font-weight: 650; line-height: 1.12; }
 .stats > div:first-child strong { color: var(--violet); }
@@ -92,7 +93,7 @@ progress::-moz-progress-bar { background: var(--mint); }
 .quiet { grid-template-columns: 1fr 1fr; margin-top: 8px; }
 .actions button, .quiet button { display: flex; justify-content: center; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; border-radius: 10px; min-height: 43px; }
 .primary { border: 1px solid #abf6d5; color: #142b25; background: var(--mint); }
-.primary:hover:not(:disabled), .win button:hover { background: #affbd8; }
+.primary:hover:not(:disabled) { background: #affbd8; }
 .secondary { background: #26253a; color: #e2d4fa; border: 1px solid #424059; }
 .secondary:hover:not(:disabled) { background: #332d4d; }
 .quiet button { min-height: 37px; border: 1px solid transparent; background: transparent; color: var(--muted); }
@@ -100,15 +101,23 @@ progress::-moz-progress-bar { background: var(--mint); }
 .status { min-height: 1.5em; line-height: 1.5; margin: 8px 0 0; color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .panel-heading > span { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.level-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
-.level-picker button { position: relative; width: 100%; min-height: 42px; background: #141725; color: var(--muted); border: 1px solid #303449; border-radius: 9px; font: 650 14px "Cascadia Mono", Consolas, monospace; }
-.level-picker button:hover { background: #29283d; color: var(--text); }
-.level-picker button[aria-current="step"] { background: #203431; border-color: #649683; color: var(--mint); }
-.level-picker button.recorded::after, .level-picker button.assisted::after { content: ""; width: 5px; height: 5px; border-radius: 50%; position: absolute; right: 7px; top: 6px; background: var(--mint); }
-.level-picker button.assisted::after { background: var(--violet); }
-.daily-panel p { color: var(--muted); font-size: 13px; line-height: 1.65; margin: 12px 0; }
-.daily-panel > div:last-child { padding-top: 11px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; }
-.daily-panel strong { color: var(--mint); }
+.rank, .edit-tools { display: grid; gap: 5px; padding: 0; border: 0; margin: 13px 0; }
+.rank { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rank legend, .settings label { color: var(--muted); font-size: 12px; }
+.rank legend { margin-bottom: 7px; padding: 0; }
+.rank label { position: relative; }
+.rank input { position: absolute; opacity: 0; }
+.rank span, .edit-tools button { display: grid; place-items: center; min-height: 38px; border: 1px solid #34384e; color: var(--muted); background: #141725; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.rank input:checked + span, .edit-tools [aria-pressed="true"] { background: #24382f; border-color: #5f907c; color: var(--mint); }
+.rank input:focus-visible + span { outline: 2px solid var(--violet); outline-offset: 2px; }
+.settings { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 8px; }
+.settings input, .settings select { display: block; width: 100%; min-height: 38px; margin-top: 6px; border: 1px solid #34384e; border-radius: 8px; background: #111421; color: var(--text); padding: 0 8px; font: inherit; }
+.settings input::placeholder { color: #adb2ca; }
+.settings input:focus-visible, .settings select:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.generate { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 13px; width: 100%; min-height: 41px; border-radius: 9px; font-size: 13px; font-weight: 650; }
+.edit-tools { grid-template-columns: repeat(4, 1fr); margin-bottom: 8px; }
+.editor-tip { margin: 0 0 13px; min-height: 32px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+#editor-status:not(:empty), #generator-status:not(:empty) { color: #e0cfef; }
 
 dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); padding: 23px; background: #1b1e2d; color: var(--text); border: 1px solid #444960; border-radius: 16px; box-shadow: 0 20px 80px #070813b0; }
 dialog::backdrop { background: #080913b8; }
@@ -138,9 +147,13 @@ dialog p, dialog dd { color: #c9ccdf; font-size: 13px; line-height: 1.65; }
   .rules-button { padding: 0; width: 38px; min-height: 38px; }
   .rules-button span { position: absolute; clip-path: inset(50%); }
   main { padding-top: 20px; }
-  .intro { margin-bottom: 15px; align-items: flex-start; }
+  .intro { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 15px; align-items: end; }
   .intro p { font-size: 12px; }
-  .progress-summary { display: none; }
+  .timer { gap: 6px; padding: 6px 7px; }
+  .timer > svg { display: none; }
+  .timer span { font-size: 10px; }
+  .timer strong { font-size: 17px; }
+  .timer button { min-width: 40px; min-height: 35px; margin-left: 0; }
   .layout { grid-template-columns: minmax(0, 1fr); gap: 13px; }
   .board-view { height: clamp(286px, 67vw, 415px); }
   .view-tools { top: 8px; right: 8px; }
@@ -150,7 +163,6 @@ dialog p, dialog dd { color: #c9ccdf; font-size: 13px; line-height: 1.65; }
   .sidebar { gap: 13px; }
   .stats { margin: 12px 0; }
   .actions { grid-template-columns: 1fr 1fr; }
-  .level-picker { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
