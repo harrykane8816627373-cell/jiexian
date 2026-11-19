@@ -86,13 +86,14 @@ h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; l
 .stats > div:first-child strong.good { color: var(--green); }
 .stats span { display: block; color: var(--muted); font-size: 11px; margin-top: 7px; }
 .actions, .quiet { display: grid; gap: 8px; }
-.quiet { grid-template-columns: 1fr 1fr; margin-top: 8px; }
+.quiet { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 8px; }
 .actions button, .quiet button { display: flex; justify-content: center; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; border-radius: 10px; min-height: 43px; }
 .primary { border: 1px solid var(--text); color: #fff; background: var(--text); }
 .primary:hover:not(:disabled) { background: #373736; }
 .secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .secondary:hover:not(:disabled) { background: var(--soft); }
-.quiet button { min-height: 37px; border: 1px solid transparent; background: transparent; color: var(--muted); }
+.quiet button { min-height: 38px; gap: 4px; padding-inline: 2px; font-size: 12px; border: 1px solid transparent; background: transparent; color: var(--muted); }
+.quiet button svg { width: 15px; height: 15px; }
 .quiet button:hover:not(:disabled) { border-color: var(--border); background: var(--soft); color: var(--text); }
 .status { min-height: 1.5em; line-height: 1.5; margin: 8px 0 0; color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -114,9 +115,7 @@ h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; l
 .edit-tools { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 8px; }
 .mechanism-editor { grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin-bottom: 10px; }
 #apply-mechanism { min-height: 38px; border-radius: 8px; padding: 0 11px; font-size: 12px; }
-#edit-quiet { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
-#edit-quiet button { font-size: 11px; gap: 3px; }
-#edit-quiet svg { width: 13px; height: 13px; }
+#edit-quiet { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #editing-return { margin-top: 12px; }
 .editor-tip { margin: 0 0 13px; min-height: 32px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 #editor-status:not(:empty), #generator-status:not(:empty) { color: var(--text); }

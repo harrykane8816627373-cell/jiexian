@@ -77,6 +77,7 @@
 
   let draft = readDraft(saved.draft);
   const draftHistory = [];
+  const draftFuture = [];
   let activeTool = 'add';
   let editorOrigin = -1;
   let mechanismDraft = { anchors: [], members: [], index: -1 };
@@ -87,6 +88,7 @@
   let clockStart = null;
   let timerMode = 'idle';
   let history = [];
+  let future = [];
   let moving = null;
   let selection = -1;
   let view = { x: 0, y: 0, zoom: 1 };
@@ -154,6 +156,7 @@
     timerMode = usable && ['paused', 'running'].includes(run.timerMode) ? run.timerMode : won ? 'finished' : 'idle';
     clockStart = timerMode === 'running' ? performance.now() : null;
     history = [];
+    future = [];
     view = { x: 0, y: 0, zoom: 1 };
     selection = -1;
     editorOrigin = -1;
@@ -219,12 +222,14 @@
     byId('solve').disabled = busy;
     byId('hint').disabled = busy;
     byId('undo').disabled = !history.length || busy;
+    byId('redo').disabled = !future.length || busy;
     byId('restart').disabled = busy || (!moves && timerMode === 'idle');
     byId('timer-toggle').textContent = timerMode === 'running' ? '暂停' : timerMode === 'idle' ? '开始' : '继续';
     byId('zoom-out').disabled = view.zoom <= 0.75 || dragging;
     byId('zoom-in').disabled = view.zoom >= 2.8 || dragging;
     byId('fit').disabled = (view.zoom === 1 && !view.x && !view.y) || dragging;
     byId('draft-undo').disabled = !draftHistory.length || dragging;
+    byId('draft-redo').disabled = !draftFuture.length || dragging;
     byId('draft-clear').disabled = !draft.points.length || dragging;
     byId('scramble-draft').disabled = dragging || !draft.edges.length;
     byId('solve-draft').disabled = dragging;
@@ -247,6 +252,7 @@
 
   function completeMove(before, count, helpUsed, message = '') {
     history.push(before);
+    future.length = 0;
     if (history.length > 120) history.shift();
     if (!helpUsed) suggestion = null;
     moves += count;
@@ -258,12 +264,13 @@
     render();
   }
 
-  function undo() {
-    if (byId('undo').disabled) return;
-    ({ state, moves } = history.pop());
+  function stepHistory(forward) {
+    if (byId(forward ? 'redo' : 'undo').disabled) return;
+    (forward ? history : future).push(currentSnapshot());
+    ({ state, moves } = (forward ? future : history).pop());
     suggestion = null;
     refreshCompletion();
-    setStatus('已撤销上一次操作。');
+    setStatus(forward ? '已恢复上一次撤销的操作。' : '已撤销上一次操作。');
     updatePanel();
     save();
     render();
@@ -283,6 +290,7 @@
   function replaceDraft(next, remember = true) {
     if (remember) {
       draftHistory.push(draft);
+      draftFuture.length = 0;
       if (draftHistory.length > 120) draftHistory.shift();
     }
     draft = puzzles.rememberAnswer(next);
@@ -299,8 +307,10 @@
     render();
   }
 
-  function undoDraft() {
-    if (!byId('draft-undo').disabled) replaceDraft(draftHistory.pop(), false);
+  function stepDraftHistory(forward) {
+    if (byId(forward ? 'draft-redo' : 'draft-undo').disabled) return;
+    (forward ? draftHistory : draftFuture).push(draft);
+    replaceDraft((forward ? draftFuture : draftHistory).pop(), false);
   }
 
   function syncMechanism() {
@@ -957,14 +967,16 @@
   editMechanism.addEventListener('change', () => pickTool('mechanism'));
   byId('apply-mechanism').addEventListener('click', applyMechanism);
   byId('scramble-draft').addEventListener('click', scrambleDraft);
-  byId('draft-undo').addEventListener('click', undoDraft);
+  byId('draft-undo').addEventListener('click', () => stepDraftHistory(false));
+  byId('draft-redo').addEventListener('click', () => stepDraftHistory(true));
   byId('draft-clear').addEventListener('click', () => replaceDraft(emptyDraft()));
   byId('solve-draft').addEventListener('click', () => startDraft(true));
   byId('play-draft').addEventListener('click', () => startDraft(false));
   byId('rules').addEventListener('click', () => byId('rules-dialog').showModal());
   byId('solve').addEventListener('click', () => animate(false));
   byId('hint').addEventListener('click', () => animate(true));
-  byId('undo').addEventListener('click', undo);
+  byId('undo').addEventListener('click', () => stepHistory(false));
+  byId('redo').addEventListener('click', () => stepHistory(true));
   byId('restart').addEventListener('click', () => { load(level); setStatus('已重开本题。'); });
   byId('timer-toggle').addEventListener('click', () => {
     if (timerMode === 'running') stopClock('paused');
@@ -985,10 +997,12 @@
       syncFullscreen();
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    const key = event.key.toLowerCase();
+    if (!event.altKey && (event.ctrlKey || event.metaKey) && (key === 'z' || key === 'y')) {
       event.preventDefault();
-      if (editing) undoDraft();
-      else undo();
+      const forward = key === 'y' || event.shiftKey;
+      if (editing) stepDraftHistory(forward);
+      else stepHistory(forward);
     }
     if (!event.ctrlKey && !event.metaKey && event.key === '1') resetView();
   });
