@@ -24,6 +24,8 @@
   };
   const orientation = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
   const opposite = (a, b) => (a < 0 && b > 0) || (a > 0 && b < 0);
+  const segmentsCross = (a, b, c, d) => opposite(orientation(a, b, c), orientation(a, b, d)) &&
+    opposite(orientation(c, d, a), orientation(c, d, b));
   const distanceToSegment = (p, a, b) => {
     const dx = b[0] - a[0];
     const dy = b[1] - a[1];
@@ -114,7 +116,7 @@
     return normalize(control, base.map((coordinate, axis) => coordinate + direction * (point[axis] - start[axis])));
   }
 
-  function evaluate(level, points) {
+  function evaluate(level, points, onConflict) {
     const badEdges = new Set();
     const badNodes = new Set();
     const badObstacles = new Set();
@@ -129,12 +131,14 @@
         if (distance(p, points[j]) >= nodeSpacing) continue;
         badNodes.add(i);
         badNodes.add(j);
+        onConflict?.([i, j]);
         count++;
       }
       level.obstacles.forEach(({ center, r }, j) => {
         if (distance(p, center) >= r + spacing + obstacleGap) return;
         badNodes.add(i);
         badObstacles.add(j);
+        onConflict?.([i]);
         count++;
       });
     });
@@ -146,12 +150,14 @@
         if (k === i || k === j || distanceToSegment(p, a, b) >= nodeEdge) return;
         badNodes.add(k);
         markEdge(edge);
+        onConflict?.([i, j, k]);
         count++;
       });
       level.obstacles.forEach(({ center, r }, k) => {
         if (distanceToSegment(center, a, b) >= r + obstacleGap) return;
         badObstacles.add(k);
         markEdge(edge);
+        onConflict?.([i, j]);
         count++;
       });
       // Collinear overlap involves a nonincident node on an edge, covered above.
@@ -159,10 +165,10 @@
         const [k, l] = level.edges[other];
         if (i === k || i === l || j === k || j === l) continue;
         const [c, d] = [points[k], points[l]];
-        if (!opposite(orientation(a, b, c), orientation(a, b, d)) ||
-            !opposite(orientation(c, d, a), orientation(c, d, b))) continue;
+        if (!segmentsCross(a, b, c, d)) continue;
         markEdge(edge);
         markEdge(other);
+        onConflict?.([i, j, k, l]);
         count++;
       }
     });
@@ -271,10 +277,15 @@
     const initial = positions(level, state);
     const initialPenalty = evaluate(level, initial).count ? Infinity : layoutPenalty(level, initial);
     if (initialPenalty <= eps) return [];
-    const witnessPenalty = layoutPenalty(level, positions(level, level.witness));
-    const start = initialPenalty <= witnessPenalty ? state : level.witness;
-    const goal = spreadLayout(level, start, Math.min(initialPenalty, witnessPenalty));
-    if (initialPenalty === Infinity) keepPlayerPositions(level, state, goal);
+    let goal;
+    if (level.preserveRepair && initialPenalty === Infinity) {
+      goal = level.witness;
+    } else {
+      const witnessPenalty = layoutPenalty(level, positions(level, level.witness));
+      const start = initialPenalty <= witnessPenalty ? state : level.witness;
+      goal = spreadLayout(level, start, Math.min(initialPenalty, witnessPenalty));
+      if (initialPenalty === Infinity) keepPlayerPositions(level, state, goal);
+    }
     const pending = level.controls.map((_, i) => i);
     const current = copy(state);
     const moves = [];
@@ -300,5 +311,5 @@
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
     positions, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
-    trackPosition, interpolate, layoutPenalty, clearances };
+    trackPosition, interpolate, layoutPenalty, clearances, segmentsCross };
 })();

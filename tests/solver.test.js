@@ -6,6 +6,7 @@ const { gunzipSync } = require('node:zlib');
 require('../engine.js');
 require('../planarity.js');
 require('../solver-obstacles.js');
+require('../solver-repair.js');
 require('../puzzles.js');
 require('../solver-tracks.js');
 require('../solver-regions.js');
@@ -15,6 +16,8 @@ require('../exact-solver.js');
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const { prepareExact, solveExact } = globalThis.JiexianExact;
+const { repair } = globalThis.JiexianRepair;
+const { screenshotDraft } = require('./repair-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -343,6 +346,47 @@ test('translation slices preserve a singleton gap between two tangent capsule bo
   const state = puzzles.searchObstacles(level);
   checkSolution(level, { status: 'solved', state });
   assert.deepEqual(g.positions(level, state), [[450, 42], [450, 498]]);
+});
+
+test('screenshot reconstruction uses two verified moves and keeps the other twelve vertices', () => {
+  const level = puzzles.authored(screenshotDraft());
+  const conflicts = [];
+  const faults = g.evaluate(level, level.points, (nodes) => conflicts.push(nodes));
+  assert.equal(faults.count, 3);
+  assert.equal(conflicts.length, faults.count);
+  assert.ok(conflicts.every((nodes) => nodes.includes(7)));
+  const answer = repair(level, level.initial);
+  assert.equal(answer?.status, 'solved');
+  assert.equal(answer.preserveRepair, true);
+  assert.equal(g.evaluate(level, g.positions(level, answer.state)).count, 0);
+  const changed = answer.state.flatMap((value, i) => g.distance(value, level.initial[i]) ? [i + 1] : []);
+  assert.deepEqual(changed, [6, 8]);
+  const plan = g.solve({ ...level, witness: answer.state, preserveRepair: answer.preserveRepair }, level.initial);
+  assert.deepEqual(plan.map(({ index }) => index + 1).sort((a, b) => a - b), [6, 8]);
+  const replay = g.copy(level.initial);
+  for (const { index, value } of plan) replay[index] = value;
+  assert.equal(g.evaluate(level, g.positions(level, replay)).count, 0);
+});
+
+test('local repair can fix an incident obstacle conflict without moving anchors', () => {
+  const level = puzzles.authored({
+    points: [[100, 260], [700, 260], [730, 410]],
+    fixed: [0, 2],
+    edges: [[0, 1], [1, 2]],
+    obstacles: [{ center: [390, 260], r: 50 }],
+  });
+  assert.equal(g.evaluate(level, g.positions(level, level.initial)).count, 1);
+  checkSolution(level, repair(level, level.initial));
+});
+
+test('unrepaired restricted controls remain available for the complete solver', () => {
+  const level = puzzles.authored({
+    points: [[110, 160], [750, 400], [350, 310], [700, 310]],
+    edges: [[0, 1], [2, 3]], fixed: [0, 2, 3], obstacles: [],
+    groups: [{ kind: 'rail', members: [1], a: [750, 400], b: [840, 400] }],
+  });
+  assert.equal(repair(level, level.initial), null);
+  assert.equal(exact(level).status, 'unsat');
 });
 
 test('fixed crossings, node-to-edge collisions and segment-to-obstacle collisions are unsatisfiable', () => {

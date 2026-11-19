@@ -1,6 +1,6 @@
 'use strict';
 
-importScripts('./engine.js?v=7', './planarity.js?v=3', './solver-obstacles.js?v=1', './puzzles.js?v=12', './solver-tracks.js?v=1',
+importScripts('./engine.js?v=8', './planarity.js?v=3', './solver-repair.js?v=1', './solver-obstacles.js?v=1', './puzzles.js?v=12', './solver-tracks.js?v=1',
   './solver-regions.js?v=1', './solver-geometry.js?v=3', './exact-solver.js?v=3');
 
 async function loadZ3() {
@@ -22,6 +22,11 @@ async function loadZ3() {
 
 self.onmessage = async ({ data: { puzzle, current } }) => {
   try {
+    const repair = globalThis.JiexianRepair.repair(puzzle, current);
+    if (repair) {
+      self.postMessage(repair);
+      return;
+    }
     const puzzles = globalThis.JiexianPuzzles;
     const obstacleLayout = puzzles.searchObstacles(puzzle, current);
     if (obstacleLayout) {

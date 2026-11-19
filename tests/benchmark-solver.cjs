@@ -3,9 +3,10 @@ const { readFileSync } = require('node:fs');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { runInNewContext } = require('node:vm');
 const { gunzipSync } = require('node:zlib');
+const { screenshotDraft } = require('./repair-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
-for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'puzzles.js', 'solver-tracks.js', 'solver-regions.js',
+for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-repair.js', 'puzzles.js', 'solver-tracks.js', 'solver-regions.js',
   'solver-geometry.js', 'exact-solver.js']) {
   require(path.join(repo, name));
 }
@@ -16,14 +17,17 @@ const sandbox = { Jiexian: g };
 const parallel = process.argv.includes('--parallel');
 const obstacles = process.argv.includes('--obstacles');
 const obstacleOnly = process.argv.includes('--obstacle-only');
+const repairCase = process.argv.includes('--repair');
+const pipeline = obstacleOnly || repairCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
+const revision = repairCase ? 'c516d53' : obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
 const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
-if (obstacleOnly) {
+if (pipeline) {
   for (const script of ['planarity.js', 'puzzles.js', 'solver-regions.js']) runInNewContext(oldScript(script), sandbox);
 }
-if (obstacles || obstacleOnly) runInNewContext(oldScript('solver-tracks.js'), sandbox);
-if (parallel || obstacles || obstacleOnly) runInNewContext(oldScript('solver-geometry.js'), sandbox);
+if (repairCase) runInNewContext(oldScript('solver-obstacles.js'), sandbox);
+if (obstacles || pipeline) runInNewContext(oldScript('solver-tracks.js'), sandbox);
+if (parallel || obstacles || pipeline) runInNewContext(oldScript('solver-geometry.js'), sandbox);
 runInNewContext(oldScript('exact-solver.js'), sandbox);
 const previous = sandbox.JiexianExact;
 
@@ -39,7 +43,10 @@ function run(solver, level) {
   const start = performance.now();
   try {
     let problem;
-    if (obstacleOnly) {
+    if (pipeline) {
+      if (solver === current && globalThis.JiexianRepair.repair(level, level.initial)) {
+        return { time: performance.now() - start, status: 'solved', checks };
+      }
       const puzzles = solver === current ? globalThis.JiexianPuzzles : sandbox.JiexianPuzzles;
       if (puzzles.searchObstacles?.(level)) return { time: performance.now() - start, status: 'solved', checks };
       problem = solver.prepareExact(level);
@@ -168,7 +175,9 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = obstacleOnly ? [
+const cases = repairCase ? [
+  ['14-node screenshot reconstruction', puzzles.authored(screenshotDraft()), 1],
+] : obstacleOnly ? [
   ['12 free vertices and 23 edges beside four disks', obstacleWall(3), 1],
   ['20 free vertices and 43 edges beside four disks', obstacleWall(5), 1],
   ['cycle translated around an interior disk', interiorDisk(), 11],
@@ -199,12 +208,12 @@ if (args.length >= 2) {
   process.exit(0);
 }
 for (const [index, [name, level]] of cases.entries()) {
-  const problem = obstacleOnly ? null : current.prepareExact(level);
+  const problem = pipeline ? null : current.prepareExact(level);
   const result = { name,
     variables: level.controls.map(({ kind }) => kind === 'rail' ? 1 : 2).reduce((a, b) => a + b, 0),
     components: problem ? problem.parts?.map(({ controls }) => controls.length) ?? [] : undefined };
   for (const tag of ['before', 'after']) {
-    const suite = obstacleOnly ? ['--obstacle-only'] : obstacles ? ['--obstacles'] : parallel ? ['--parallel'] : [];
+    const suite = repairCase ? ['--repair'] : obstacleOnly ? ['--obstacle-only'] : obstacles ? ['--obstacles'] : parallel ? ['--parallel'] : [];
     const child = spawnSync(process.execPath, [__filename, String(index), tag, ...suite],
       { timeout: 7000, encoding: 'utf8' });
     result[tag] = child.error ? child.error.code : child.status === 0 ? JSON.parse(child.stdout) : child.stderr.trim();
