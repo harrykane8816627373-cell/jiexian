@@ -83,7 +83,7 @@
   let tab = 'random';
   let editing = false;
   let randomConfig = null;
-  let level, state, moves, assisted, elapsed, won;
+  let level, state, moves, elapsed, won;
   let clockStart = null;
   let timerMode = 'idle';
   let history = [];
@@ -127,7 +127,7 @@
     saved.tab = tab;
     if (tab === 'random') {
       const stable = moving?.kind === 'node' ? moving.before.state : state;
-      saved.random = { config: randomConfig, state: stable, moves, assisted, elapsed: timeSpent(), timerMode };
+      saved.random = { config: randomConfig, state: stable, moves, elapsed: timeSpent(), timerMode };
     }
     try {
       localStorage.setItem(storageKey, JSON.stringify(saved));
@@ -136,7 +136,7 @@
     }
   }
 
-  function currentSnapshot() { return { state: g.copy(state), moves, assisted }; }
+  function currentSnapshot() { return { state: g.copy(state), moves }; }
 
   function load(next, run) {
     animation = null;
@@ -149,7 +149,6 @@
       Array.isArray(part) && part.length === level.controls[i].start.length && part.every(Number.isFinite));
     state = usable ? run.state.map((value, i) => g.normalize(level.controls[i], value)) : g.copy(level.initial);
     moves = usable && Number.isSafeInteger(run.moves) && run.moves >= 0 ? run.moves : 0;
-    assisted = usable && run.assisted === true;
     elapsed = usable && Number.isFinite(run.elapsed) && run.elapsed >= 0 ? run.elapsed : 0;
     won = !editing && g.evaluate(level, g.positions(level, state)).count === 0;
     timerMode = usable && ['paused', 'running'].includes(run.timerMode) ? run.timerMode : won ? 'finished' : 'idle';
@@ -171,7 +170,7 @@
     byId('session-panel').hidden = editing;
     byId('timer').hidden = editing;
     byId('editor-status').textContent = '';
-    setStatus(won ? (assisted ? '本题已辅助解开。' : '本题的连线已经理顺。') : '');
+    setStatus('');
     updatePanel();
     syncMechanism();
     save();
@@ -201,9 +200,6 @@
 
   function updatePanel() {
     progressText();
-    byId('win').hidden = !won;
-    byId('win-title').textContent = assisted ? '已辅助解开' : moves ? '解线成功' : '连线已经理顺';
-    byId('win-detail').textContent = `${moves} 步 · ${clockText(timeSpent())}`;
     updateStats(g.evaluate(level, g.positions(level, state)).count);
     updateControls();
     updateClock();
@@ -254,10 +250,9 @@
     if (history.length > 120) history.shift();
     if (!helpUsed) suggestion = null;
     moves += count;
-    assisted ||= helpUsed;
     if (timerMode === 'idle') startClock();
     refreshCompletion();
-    setStatus(won ? (assisted ? '本题已辅助解开。' : '本题已独立解开。') : message);
+    setStatus(won ? '' : message);
     updatePanel();
     save();
     render();
@@ -265,7 +260,7 @@
 
   function undo() {
     if (byId('undo').disabled) return;
-    ({ state, moves, assisted } = history.pop());
+    ({ state, moves } = history.pop());
     suggestion = null;
     refreshCompletion();
     setStatus('已撤销上一次操作。');
@@ -547,7 +542,7 @@
     }
     const plan = suggestion ?? g.solve(level, state);
     if (!plan.length) {
-      setStatus('连线已经理顺，可以继续拖动节点。');
+      setStatus('');
       return;
     }
     if (timerMode === 'idle') startClock();
@@ -582,7 +577,7 @@
       state = playback.state;
       animation = null;
       suggestion = singleStep ? plan.slice(1) : null;
-      completeMove(before, steps.length, true, '已提示一步，可以继续拖动。');
+      completeMove(before, steps.length, true, singleStep ? '已提示一步，可以继续拖动。' : '');
     }
     requestAnimationFrame(tick);
   }
@@ -624,10 +619,7 @@
     const active = Boolean(document.fullscreenElement) || expandedView;
     document.documentElement.classList.toggle('game-fullscreen', active);
     const button = byId('fullscreen');
-    const label = active ? '退出全屏' : '全屏';
-    button.setAttribute('aria-pressed', String(active));
-    button.setAttribute('aria-label', label);
-    button.title = label;
+    button.querySelector('span').textContent = active ? '退出全屏' : '全屏';
     button.querySelector('use').setAttribute('href', active ? '#i-exit-fullscreen' : '#i-fullscreen');
   }
 
