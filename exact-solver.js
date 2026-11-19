@@ -57,7 +57,11 @@
     const assert = (expr) => setup.push(call('assert', expr));
     const bounded = (name, lower, upper) => assert(lower === upper ? call('=', name, lower) :
       and(call('<=', lower, name), call('<=', name, upper)));
-    const fraction = ([n, d]) => n === 0n ? '0' : n === d ? '1' : call('/', String(n), String(d));
+    const fraction = ([n, d]) => {
+      if (!n) return '0';
+      if (n === d) return '1';
+      return n < 0n ? call('-', call('/', String(-n), String(d))) : call('/', String(n), String(d));
+    };
     const controls = part.controls.map((i) => {
       const control = level.controls[i];
       const { kind, members: [node, partner] } = control;
@@ -86,6 +90,11 @@
       }
       for (const member of control.members) {
         points[member] = points[member].map((expr, axis) => define(`p${member}_${axis}`, 'Real', expr));
+      }
+      const cut = part.cuts?.get(i);
+      if (cut) {
+        assert(or(...cut.boxes.map((box) => and(...box.flatMap(([lo, hi], axis) =>
+          [call('<=', fraction([lo, cut.scale]), names[axis]), call('<=', names[axis], fraction([hi, cut.scale]))])))));
       }
       return { index: i, names };
     });
@@ -166,14 +175,14 @@
     for (const [index, value] of problem.packed) state[index] = value;
     if (!problem.parts.length) {
       if (playable(level, state)) return { status: 'solved', state };
-      if (!problem.packingParts.length) return { status: 'precision' };
+      if (!problem.retryParts.length) return { status: 'precision' };
     }
     return { status: 'ready', ...problem, state };
   }
 
   function solveExact(level, ask, problem = prepareExact(level)) {
     if (problem.status !== 'ready') return problem;
-    const { coordinates, railBounds, parts, packingParts } = problem;
+    const { coordinates, railBounds, parts, retryParts } = problem;
     const state = g.copy(problem.state);
     let checks = 0;
     const query = (command) => {
@@ -193,8 +202,8 @@
     }
     if (uncertain) return { status: 'unknown' };
     if (playable(level, state)) return { status: 'solved', state };
-    // A greedy boundary position may round into a conflict. Try another model for those parts.
-    for (const part of packingParts) solve(part);
+    // A geometrically certified position may round into a conflict. Try a new model for those parts.
+    for (const part of retryParts) solve(part);
     return playable(level, state) ? { status: 'solved', state } : { status: 'precision' };
   }
 

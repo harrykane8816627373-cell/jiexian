@@ -7,6 +7,7 @@ require('../engine.js');
 require('../planarity.js');
 require('../puzzles.js');
 require('../solver-tracks.js');
+require('../solver-regions.js');
 require('../solver-geometry.js');
 require('../exact-solver.js');
 
@@ -206,6 +207,87 @@ test('a crossing inside one rigid rotor is an immediate contradiction', () => {
   const points = [[250, 150], [350, 250], [350, 150], [250, 250]];
   const level = g.createLevel({ points, edges: [[0, 1], [2, 3]], controls: [g.rotor([0, 1, 2, 3], [300, 200], 0)] });
   assert.equal(prepareExact(level).status, 'unsat');
+});
+
+function coveredRotor(remove = -1) {
+  const points = [[502, 270], [450, 370], [100, 475], [800, 475]];
+  const centers = [[502, 270], [450, 322], [398, 270], [450, 218]];
+  return g.createLevel({ points, edges: [[2, 3]], controls: [g.rotor([0, 1], [450, 270], 0)],
+    obstacles: centers.filter((_, i) => i !== remove).map((center) => ({ center, r: 24 })) });
+}
+
+test('different obstacles can jointly cover an entire star-disk orbit', () => {
+  assert.equal(prepareExact(coveredRotor()).status, 'unsat');
+  for (let i = 0; i < 4; i++) {
+    const open = coveredRotor(i);
+    checkSolution(open, prepareExact(open));
+  }
+});
+
+test('an obstacle at a mirror segment midpoint blocks the edge even though both endpoints are clear', () => {
+  const points = [[330, 270], [570, 270]];
+  const level = g.createLevel({ points, edges: [[0, 1]], controls: [g.mirror(0, 1, points[0])],
+    obstacles: [{ center: [450, 270], r: 24 }] });
+  const withoutEdge = { ...level, edges: [] };
+  assert.equal(g.evaluate(withoutEdge, g.positions(withoutEdge, withoutEdge.initial)).count, 0);
+  assert.equal(prepareExact(level).status, 'unsat');
+});
+
+test('all positions of an endpoint can lie in the shadow of an obstacle', () => {
+  const points = [[100, 42], [815, 42], [858, 48]];
+  const base = g.createLevel({ points, edges: [[0, 1]], controls: [g.mirror(1, 2, points[1])] });
+  assert.equal(g.evaluate(base, g.positions(base, base.initial)).count, 0);
+  const blocked = { ...base, obstacles: [{ center: [450, 48], r: 24 }] };
+  assert.equal(prepareExact(blocked).status, 'unsat');
+  const tangent = { ...base, obstacles: [{ center: [450, 70], r: 24 }] };
+  assert.equal(g.evaluate(tangent, g.positions(tangent, tangent.initial)).count, 0);
+  const result = exact(tangent);
+  if (result.status === 'solved') checkSolution(tangent, result);
+  else assert.equal(result.status, 'precision');
+});
+
+test('convex obstacle shadows can block a segment with two independently moving endpoints', () => {
+  const points = [[98, 42], [42, 48], [798, 42], [858, 48]];
+  const base = g.createLevel({ points, edges: [[0, 2]],
+    controls: [g.mirror(0, 1, points[0]), g.mirror(2, 3, points[2])] });
+  assert.equal(g.evaluate(base, g.positions(base, base.initial)).count, 0);
+  const blocked = { ...base, obstacles: [{ center: [450, 50], r: 24 }] };
+  assert.equal(prepareExact(blocked).status, 'unsat');
+});
+
+test('a circular obstacle makes two individually feasible mirror pairs incompatible', () => {
+  const points = [[42, 42], [170, 42], [76, 42], [136, 42], [100, 430], [800, 430]];
+  const base = g.createLevel({ points, edges: [[4, 5]],
+    controls: [g.mirror(0, 1, points[0]), g.mirror(2, 3, points[2])] });
+  assert.equal(g.evaluate(base, g.positions(base, base.initial)).count, 0);
+  const obstacles = [{ center: [106, 42], r: 24 }];
+  for (let remove = 0; remove < 2; remove++) {
+    const remaining = points.filter((_, i) => i !== 2 * remove && i !== 2 * remove + 1);
+    const solo = g.createLevel({ points: remaining, edges: [[2, 3]], obstacles, controls: [g.mirror(0, 1, remaining[0])] });
+    checkSolution(solo, prepareExact(solo));
+  }
+  assert.equal(prepareExact({ ...base, obstacles }).status, 'unsat');
+});
+
+test('a contradictory pair suffices to reject a much larger obstacle component', () => {
+  const points = [[42, 42], [170, 42], [76, 42], [136, 42], [100, 430], [800, 430],
+    [100, 105], [220, 120], [340, 110], [500, 130], [620, 90], [760, 108], [270, 350], [650, 350]];
+  const controls = [g.mirror(0, 1, points[0]), g.mirror(2, 3, points[2]),
+    ...points.slice(6).map((p, i) => g.free(i + 6, p))];
+  const level = g.createLevel({ points, edges: [[4, 5]], controls, obstacles: [{ center: [106, 42], r: 24 }] });
+  assert.equal(prepareExact(level).status, 'unsat');
+});
+
+test('remaining rotor chart boxes are passed as exact cuts to the full mixed solver', () => {
+  const points = [[502, 270], [450, 370], [100, 475], [800, 475], [100, 110], [275, 115], [720, 190]];
+  const controls = [g.rotor([0, 1], [450, 270], 0), ...points.slice(4).map((p, i) => g.free(i + 4, p))];
+  const level = g.createLevel({ points, edges: [[2, 3]], controls, obstacles: [{ center: [502, 270], r: 24 }] });
+  const problem = prepareExact(level);
+  assert.equal(problem.status, 'ready');
+  const cut = problem.parts[0].cuts.get(0);
+  assert.ok(cut.boxes.length <= 12);
+  assert.ok(cut.boxes.some((box) => box.some(([lo]) => lo < 0n)));
+  checkSolution(level, exact(level));
 });
 
 test('fixed crossings, node-to-edge collisions and segment-to-obstacle collisions are unsatisfiable', () => {

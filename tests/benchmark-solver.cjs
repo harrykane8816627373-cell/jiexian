@@ -5,16 +5,20 @@ const { runInNewContext } = require('node:vm');
 const { gunzipSync } = require('node:zlib');
 
 const repo = path.join(__dirname, '..');
-for (const name of ['engine.js', 'puzzles.js', 'solver-tracks.js', 'solver-geometry.js', 'exact-solver.js']) require(path.join(repo, name));
+for (const name of ['engine.js', 'puzzles.js', 'solver-tracks.js', 'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
+  require(path.join(repo, name));
+}
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const current = globalThis.JiexianExact;
 const sandbox = { Jiexian: g };
 const parallel = process.argv.includes('--parallel');
-const args = process.argv.slice(2).filter((arg) => arg !== '--parallel');
-const revision = parallel ? '2c917c1' : '170852e';
+const obstacles = process.argv.includes('--obstacles');
+const args = process.argv.slice(2).filter((arg) => arg !== '--parallel' && arg !== '--obstacles');
+const revision = obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
 const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
-if (parallel) runInNewContext(oldScript('solver-geometry.js'), sandbox);
+if (obstacles) runInNewContext(oldScript('solver-tracks.js'), sandbox);
+if (parallel || obstacles) runInNewContext(oldScript('solver-geometry.js'), sandbox);
 runInNewContext(oldScript('exact-solver.js'), sandbox);
 const previous = sandbox.JiexianExact;
 
@@ -103,13 +107,40 @@ function parallelPacking(counts, length, offset, diagonal = false) {
   return g.createLevel({ points, edges: [[points.length - 2, points.length - 1]], controls });
 }
 
+function starDisks(remove = -1) {
+  const points = [[502, 270], [450, 370], [100, 475], [800, 475]];
+  const centers = [[502, 270], [450, 322], [398, 270], [450, 218]];
+  return g.createLevel({ points, edges: [[2, 3]], controls: [g.rotor([0, 1], [450, 270], 0)],
+    obstacles: centers.filter((_, i) => i !== remove).map((center) => ({ center, r: 24 })) });
+}
+
+function shadow() {
+  const points = [[100, 42], [815, 42], [858, 48]];
+  return g.createLevel({ points, edges: [[0, 1]], controls: [g.mirror(1, 2, points[1])],
+    obstacles: [{ center: [450, 48], r: 24 }] });
+}
+
+function blockedMirrors() {
+  const points = [[42, 42], [170, 42], [76, 42], [136, 42], [100, 430], [800, 430],
+    [100, 105], [220, 120], [340, 110], [500, 130], [620, 90], [760, 108], [270, 350], [650, 350]];
+  const controls = [g.mirror(0, 1, points[0]), g.mirror(2, 3, points[2]),
+    ...points.slice(6).map((p, i) => g.free(i + 6, p))];
+  return g.createLevel({ points, edges: [[4, 5]], controls, obstacles: [{ center: [106, 42], r: 24 }] });
+}
+
 function report(level, solver, repetitions) {
   const results = Array.from({ length: repetitions }, () => run(solver, level)).sort((a, b) => a.time - b.time);
   const middle = results[Math.floor(results.length / 2)];
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = parallel ? [
+const cases = obstacles ? [
+  ['whole rotor orbit covered by four disks', starDisks(), 11],
+  ['rotor finds remaining arc between three disks', starDisks(2), 11],
+  ['mirror edge inside obstacle shadow', shadow(), 11],
+  ['obstacle forces pair contradiction in a 20-variable component', blockedMirrors(), 7],
+  ['one movable crossing', coupled(), 11],
+] : parallel ? [
   ['18 sliders on two coupled parallel tracks', parallelPacking([9, 9], 550, 15), 1],
   ['17 sliders with too many forced same-track neighbors', parallelPacking([13, 4], 480, 15), 1],
   ['8 sliders on parallel oblique tracks', parallelPacking([4, 4], 250, 20, true), 3],
@@ -135,7 +166,8 @@ for (const [index, [name, level]] of cases.entries()) {
     variables: level.controls.map(({ kind }) => kind === 'rail' ? 1 : 2).reduce((a, b) => a + b, 0),
     components: problem.parts?.map(({ controls }) => controls.length) ?? [] };
   for (const tag of ['before', 'after']) {
-    const child = spawnSync(process.execPath, [__filename, String(index), tag, ...(parallel ? ['--parallel'] : [])],
+    const suite = obstacles ? ['--obstacles'] : parallel ? ['--parallel'] : [];
+    const child = spawnSync(process.execPath, [__filename, String(index), tag, ...suite],
       { timeout: 7000, encoding: 'utf8' });
     result[tag] = child.error ? child.error.code : child.status === 0 ? JSON.parse(child.stdout) : child.stderr.trim();
   }

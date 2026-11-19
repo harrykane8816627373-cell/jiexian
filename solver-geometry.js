@@ -3,6 +3,7 @@
 
   const g = globalThis.Jiexian;
   const trackSolver = globalThis.JiexianSolverTracks;
+  const regions = globalThis.JiexianSolverRegions;
   const min = (a, b) => a < b ? a : b;
   const max = (a, b) => a > b ? a : b;
   const square = (x) => x * x;
@@ -97,7 +98,7 @@
   }
 
   function solveTrackComponents(parts, rails, tracks, spacing, points, owners) {
-    const packed = new Map(), unresolved = [], packingParts = [];
+    const packed = new Map(), unresolved = [], retryParts = [];
     const seen = new Set();
     function saveSlots(track, slots) {
       track.members.forEach((index, i) => packed.set(index, [trackSolver.approximateParameter(rails[index], slots[i])]));
@@ -127,14 +128,14 @@
           solved = true;
         }
       }
-      (solved ? packingParts : unresolved).push(part);
+      (solved ? retryParts : unresolved).push(part);
     }
     for (const track of tracks) {
       if (seen.has(track)) continue;
       const result = trackSolver.solveParallel([track], spacing, true);
       saveSlots(track, result.sequences?.[0] ?? track.relaxedSlots);
     }
-    return { packed, packingParts, parts: unresolved };
+    return { packed, retryParts, parts: unresolved };
   }
 
   function analyze(level) {
@@ -145,7 +146,7 @@
     const coordinates = [...level.points, ...level.obstacles.map(({ center }) => center)];
     const controlCoordinates = level.controls.flatMap(({ a, b, center, sum }) =>
       [...(a ?? []), ...(b ?? []), ...(center ?? []), ...(sum ?? [])]);
-    const units = scaledDecimals([...coordinates.flat(), ...controlCoordinates, ...nodeLimits, ...edgeLimits,
+    const units = scaledDecimals([1, ...coordinates.flat(), ...controlCoordinates, ...nodeLimits, ...edgeLimits,
       g.margin, g.width - g.margin, g.height - g.margin, clearance.nodes, clearance.nodeEdge]);
     const points = coordinates.map((p) => p.map(units));
     const owners = points.map((_, i) => i < count ? level.ownership[i] : -1);
@@ -190,7 +191,11 @@
     const parts = components(records, level.controls.length);
     const result = solveTrackComponents(parts, rails, tracks, spacing, points, owners);
     if (!result) return { unsat: true };
-    return { ...result, coordinates, railBounds: rails.map((rail) => rail && trackSolver.parameterBounds(rail)) };
+    const railBounds = rails.map((rail) => rail && trackSolver.parameterBounds(rail));
+    const region = regions.tighten(level, result.parts, boxes, points, owners, units, railBounds);
+    if (!region) return { unsat: true };
+    for (const [index, value] of region.packed) result.packed.set(index, value);
+    return { ...result, coordinates, railBounds, parts: region.parts, retryParts: [...result.retryParts, ...region.retry] };
   }
 
   globalThis.JiexianSolverGeometry = { analyze };
