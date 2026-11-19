@@ -618,7 +618,8 @@
       // File URLs cannot load a same-origin worker or fetch its WebAssembly.
       setTimeout(() => {
         if (search !== job) return;
-        const repair = globalThis.JiexianRepair.repair(puzzle, current);
+        const repair = globalThis.JiexianCoupledRepair.repair(puzzle, current) ??
+          globalThis.JiexianRepair.repair(puzzle, current);
         if (repair) { receive(repair); return; }
         const answer = puzzles.searchObstacles(puzzle, current) ?? puzzles.searchDraft(puzzle, current);
         receive(answer ? { status: 'solved', state: answer } : { status: 'local' });
@@ -626,7 +627,7 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=6');
+      job.worker = new Worker('./solver-worker.js?v=7');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current });

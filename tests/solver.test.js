@@ -7,6 +7,7 @@ require('../engine.js');
 require('../planarity.js');
 require('../solver-obstacles.js');
 require('../solver-repair.js');
+require('../solver-coupled-repair.js');
 require('../puzzles.js');
 require('../solver-tracks.js');
 require('../solver-regions.js');
@@ -17,7 +18,8 @@ const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const { prepareExact, solveExact } = globalThis.JiexianExact;
 const { repair } = globalThis.JiexianRepair;
-const { screenshotDraft } = require('./repair-fixture.cjs');
+const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
+const { screenshotDraft, coupledScreenshotDraft } = require('./repair-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -47,7 +49,9 @@ function checkSolution(level, result) {
   assert.equal(result.status, 'solved');
   assert.equal(g.evaluate(level, g.positions(level, result.state)).count, 0);
   const replay = g.copy(level.initial);
-  for (const { index, value } of g.solve({ ...level, witness: result.state }, replay)) replay[index] = value;
+  for (const { index, value } of g.solve({ ...level, witness: result.state, preserveRepair: result.preserveRepair }, replay)) {
+    replay[index] = value;
+  }
   assert.equal(g.evaluate(level, g.positions(level, replay)).count, 0);
 }
 
@@ -366,6 +370,54 @@ test('screenshot reconstruction uses two verified moves and keeps the other twel
   const replay = g.copy(level.initial);
   for (const { index, value } of plan) replay[index] = value;
   assert.equal(g.evaluate(level, g.positions(level, replay)).count, 0);
+});
+
+test('repairing the screenshot edge recruits a green vertex to clear the neighboring constraints', () => {
+  const level = puzzles.authored(coupledScreenshotDraft());
+  const initial = [];
+  g.evaluate(level, level.points, (nodes, kind, obstacle) => initial.push([nodes, kind, obstacle]));
+  assert.deepEqual(initial, [[[1, 4], 'edge-obstacle', 0]]);
+  assert.equal(repair(level, level.initial), null);
+  const answer = repairTogether(level, level.initial);
+  checkSolution(level, answer);
+  const plan = g.solve({ ...level, witness: answer.state, preserveRepair: answer.preserveRepair }, level.initial);
+  assert.deepEqual(plan.map(({ index }) => index + 1).sort((a, b) => a - b), [2, 5, 14]);
+
+  const withoutGreenMove = g.copy(answer.state);
+  withoutGreenMove[13] = level.initial[13];
+  assert.ok(g.evaluate(level, g.positions(level, withoutGreenMove)).count > 0);
+});
+
+test('joint obstacle repair solves 48 perturbations of the screenshot geometry', () => {
+  const draft = coupledScreenshotDraft();
+  for (let sample = 0; sample < 48; sample++) {
+    const points = draft.points.map(([x, y], i) => [
+      g.clamp(x + .64 * Math.sin(sample * 11 + i * 91), g.margin, g.width - g.margin),
+      g.clamp(y + .64 * Math.cos(sample * 23 + i * 13), g.margin, g.height - g.margin),
+    ]);
+    const [{ center: [x, y], r }] = draft.obstacles;
+    const obstacles = [{ center: [x + .65 * Math.sin(sample), y + .65 * Math.cos(sample)],
+      r: r + .38 * Math.sin(sample * 31) }];
+    const level = puzzles.authored({ ...draft, points, obstacles });
+    const answer = repairTogether(level, level.initial);
+    assert.equal(answer?.status, 'solved', `perturbation ${sample}`);
+    assert.equal(g.evaluate(level, g.positions(level, answer.state)).count, 0);
+  }
+});
+
+test('an edge through the disk center can move while a fixed point and rail stay in place', () => {
+  const points = [[160, 270], [740, 270], [400, 90], [500, 90]];
+  const level = g.createLevel({
+    points, edges: [[0, 1], [2, 3]], obstacles: [{ center: [450, 270], r: 65 }],
+    controls: [g.free(0, points[0]), g.free(1, points[1]), g.rail(2, points[2], [420, 90], .25)],
+  });
+  assert.equal(g.evaluate(level, g.positions(level, level.initial)).count, 1);
+  const answer = repairTogether(level, level.initial);
+  checkSolution(level, answer);
+  assert.deepEqual(answer.state[2], level.initial[2]);
+  assert.deepEqual(g.positions(level, answer.state)[3], points[3]);
+  const anchored = g.createLevel({ ...level, controls: [level.controls[2]] });
+  assert.equal(repairTogether(anchored, anchored.initial), null);
 });
 
 test('local repair can fix an incident obstacle conflict without moving anchors', () => {

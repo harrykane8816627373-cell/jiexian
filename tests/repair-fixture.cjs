@@ -15,4 +15,20 @@ function screenshotDraft() {
   return { points, edges, obstacles };
 }
 
-module.exports = { screenshotDraft };
+// Reconstructed from the 15-node screenshot whose only dashed edge is 2–5.
+function coupledScreenshotDraft() {
+  const world = ([x, y]) => [
+    Math.min(858, Math.max(42, 24 + (x - 156.5) * 852 / 1090)),
+    Math.min(498, Math.max(42, 24 + (y - 181.9) * 492 / 630)),
+  ];
+  const points = [[1169.5, 497], [1146.5, 744.5], [426, 690.5], [515.5, 715.5], [309, 399.5], [1014, 460],
+    [297, 664.3], [364, 657.5], [646, 708.2], [540.3, 623.8], [329.5, 580.5], [227.3, 788.6], [940.5, 331.8],
+    [940.3, 609.8], [713.6, 708.3]].map(world);
+  const edges = [[1, 2], [1, 13], [2, 5], [2, 6], [2, 12], [2, 15], [3, 4], [3, 5], [3, 8], [3, 12],
+    [4, 5], [4, 9], [4, 10], [4, 12], [5, 10], [5, 11], [5, 12], [5, 15], [6, 14], [7, 11], [7, 12], [8, 11],
+    [8, 12], [9, 10], [9, 15], [13, 14]].map(([a, b]) => [a - 1, b - 1]);
+  const obstacles = [{ center: world([771.1, 630.3]), r: 73 * 852 / 1090 }];
+  return { points, edges, obstacles };
+}
+
+module.exports = { screenshotDraft, coupledScreenshotDraft };

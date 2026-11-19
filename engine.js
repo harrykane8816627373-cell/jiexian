@@ -131,14 +131,14 @@
         if (distance(p, points[j]) >= nodeSpacing) continue;
         badNodes.add(i);
         badNodes.add(j);
-        onConflict?.([i, j]);
+        onConflict?.([i, j], 'nodes');
         count++;
       }
       level.obstacles.forEach(({ center, r }, j) => {
         if (distance(p, center) >= r + spacing + obstacleGap) return;
         badNodes.add(i);
         badObstacles.add(j);
-        onConflict?.([i]);
+        onConflict?.([i], 'node-obstacle', j);
         count++;
       });
     });
@@ -150,14 +150,14 @@
         if (k === i || k === j || distanceToSegment(p, a, b) >= nodeEdge) return;
         badNodes.add(k);
         markEdge(edge);
-        onConflict?.([i, j, k]);
+        onConflict?.([i, j, k], 'node-edge');
         count++;
       });
       level.obstacles.forEach(({ center, r }, k) => {
         if (distanceToSegment(center, a, b) >= r + obstacleGap) return;
         badObstacles.add(k);
         markEdge(edge);
-        onConflict?.([i, j]);
+        onConflict?.([i, j], 'edge-obstacle', k);
         count++;
       });
       // Collinear overlap involves a nonincident node on an edge, covered above.
@@ -168,7 +168,7 @@
         if (!segmentsCross(a, b, c, d)) continue;
         markEdge(edge);
         markEdge(other);
-        onConflict?.([i, j, k, l]);
+        onConflict?.([i, j, k, l], 'crossing');
         count++;
       }
     });
