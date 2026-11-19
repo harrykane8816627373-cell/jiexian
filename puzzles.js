@@ -69,7 +69,7 @@
   const mechanisms = ['mirror', 'rotor', 'rail'];
   const between = (low, high, random) => low + Math.floor(random() * (high - low + 1));
 
-  function recipeFor(count, rank, mode, random) {
+  function recipeFor(count, rank, mode, random, sharedOrbits) {
     const settings = difficulty[rank];
     const mixed = mode === 'mixed';
     const groupSizes = { mirror: [], rotor: [], rail: [] };
@@ -82,7 +82,7 @@
     if (!mixed && !mechanisms.includes(mode)) return { fixed, obstacles, ...groupSizes };
 
     const maximum = mixed ? count - fixed - 1 : mode === 'rail' ? Math.min(count - 2, settings.maxTrackNodes) :
-      mode === 'mirror' ? Math.min(count, 2 * Math.max(2, settings.groups + 1)) : Math.min(count - 1, 13);
+      mode === 'mirror' ? Math.min(count, 2 * Math.max(2, settings.groups + 1)) : Math.min(count - (sharedOrbits ? 2 : 1), 13);
     const minimum = mixed ? Math.max(2, Math.floor(maximum * .57)) : mode === 'mirror' && count >= 8 ? 4 :
       Math.max(2, Math.floor(maximum * .50));
     let remaining = between(minimum, maximum, random);
@@ -157,12 +157,44 @@
     return { center, members: shuffle(nearby, random).slice(0, bestSize) };
   }
 
-  function buildWitness(count, rank, mode, random) {
+  function addRotors(points, sizes, random) {
+    const slots = shuffle([210, 450, 690], random);
+    const controls = [];
+    for (const size of sizes) {
+      const slot = slots.pop();
+      const innerCount = size === 2 ? 2 : between(2, Math.min(4, size - 1), random);
+      let members;
+      let center;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        center = [slot + (random() - .5) * 56, 270 + (random() - .5) * 106];
+        const inner = between(45, 63, random);
+        const outer = inner + between(47, 64, random);
+        const orbit = (amount, radius) => {
+          const phase = random() * 2 * Math.PI;
+          return Array.from({ length: amount }, (_, i) => {
+            const angle = phase + (i + random() * .19) * 2 * Math.PI / amount;
+            return [center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)];
+          });
+        };
+        const candidates = [...orbit(innerCount, inner), ...orbit(size - innerCount, outer)];
+        if (candidates.some((point) => points.some((other) => g.distance(point, other) < 35))) continue;
+        members = candidates.map((_, i) => points.length + i);
+        points.push(...candidates);
+        break;
+      }
+      if (!members) return null;
+      controls.push(g.rotor(members, center, 0));
+    }
+    return controls;
+  }
+
+  function buildWitness(count, rank, mode, random, sharedOrbits) {
     const settings = difficulty[rank];
-    const recipe = recipeFor(count, rank, mode, random);
+    const recipe = recipeFor(count, rank, mode, random, sharedOrbits);
     const trackNodes = recipe.rail.reduce((sum, size) => sum + size, 0);
-    const inside = trackNodes ? 0 : count >= 10 && rank === 'hard' ? 2 : count >= 6 && rank !== 'easy' ? 1 : 0;
-    const ring = count - trackNodes - inside;
+    const diskNodes = sharedOrbits ? recipe.rotor.reduce((sum, size) => sum + size, 0) : 0;
+    const inside = trackNodes || diskNodes ? 0 : count >= 10 && rank === 'hard' ? 2 : count >= 6 && rank !== 'easy' ? 1 : 0;
+    const ring = count - trackNodes - diskNodes - inside;
     const phase = random() * 2 * Math.PI;
     // A wider ellipse and less jitter keep the perimeter nodes apart on large boards.
     const denseRing = ring > 24;
@@ -179,12 +211,17 @@
       points.push([450 + (i - (inside - 1) / 2) * 205 + (random() - .5) * 48, 270 + (random() - .5) * 106]);
     }
     const controlled = addTracks(points, recipe.rail, random);
+    if (diskNodes) {
+      const disks = addRotors(points, recipe.rotor, random);
+      if (!disks) return null;
+      controlled.push(...disks);
+    }
     const graph = fitGraph(points, ring, settings, random);
     if (!graph) return null;
     const available = shuffle(Array.from({ length: ring + inside }, (_, i) => i), random);
     const take = () => available.pop();
     const centers = [];
-    for (const size of recipe.rotor) {
+    for (const size of sharedOrbits ? [] : recipe.rotor) {
       const disk = chooseRotor(points, available, size, centers, random);
       if (!disk) return null;
       disk.members.forEach((node) => available.splice(available.indexOf(node), 1));
@@ -212,12 +249,12 @@
     return g.createLevel({ ...graph, points, controls: [...available.map((node) => g.free(node, points[node])), ...controlled] });
   }
 
-  function generate(seed, rank, count, mode) {
+  function generate(seed, rank, count, mode, sharedOrbits = true) {
     const random = randomFrom(seed);
     const settings = difficulty[rank];
     let best;
     for (let attempt = 0; attempt < 30; attempt++) {
-      const puzzle = buildWitness(count, rank, mode, random);
+      const puzzle = buildWitness(count, rank, mode, random, sharedOrbits);
       if (!puzzle) continue;
       const indices = puzzle.controls.map((_, i) => i);
       const movable = indices.filter((i) => puzzle.controls[i].kind === 'free');

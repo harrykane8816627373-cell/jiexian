@@ -7,11 +7,11 @@
   <meta name="description" content="解线是一款拖动节点、理顺连线的空间益智游戏。按难度随机出题，也可以自己摆点连线并求解。">
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
-  <link rel="stylesheet" href="./style.css?v=9">
+  <link rel="stylesheet" href="./style.css?v=10">
   <script src="./engine.js?v=6" defer></script>
   <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=8" defer></script>
-  <script src="./game.js?v=11" defer></script>
+  <script src="./puzzles.js?v=9" defer></script>
+  <script src="./game.js?v=12" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -79,7 +79,7 @@
         </div>
         <div class="board-footer">
           <div class="legend"><span><i class="clear-line"></i>顺畅</span><span><i class="cross-line"></i>冲突</span><span id="anchor-legend"><i class="anchor-mark">×</i>固定点</span></div>
-          <span id="board-help">拖动空白处平移 · 滚轮缩放 · 键盘用 Q / E 选点</span>
+          <span id="board-help">拖动空白处平移 · 双指或滚轮缩放</span>
         </div>
       </section>
 
@@ -143,7 +143,7 @@
             <div><strong id="moves">0</strong><span>步数</span></div>
           </div>
           <div class="actions">
-            <button class="primary" id="solve"><svg><use href="#i-spark"/></svg>一键求解</button>
+            <button class="primary" id="solve"><svg><use href="#i-spark"/></svg><span id="solve-label">一键求解</span></button>
             <button class="secondary" id="hint"><svg><use href="#i-hint"/></svg>提示一步</button>
           </div>
           <div class="quiet">
@@ -168,8 +168,8 @@
       <div><dt>共享滑轨</dt><dd>同一条滑轨上的节点各自沿轨道移动。</dd></div>
       <div><dt>禁行区</dt><dd>节点与连线都要和带纹理的圆圈保持距离。</dd></div>
     </dl>
-    <p>拖动空白处移动视图，滚轮或 ＋ / − 缩放，按 1 回正。点棋盘右上角的全屏按钮可以扩大视野。键盘可用 Q / E 选择节点、方向键移动。</p>
-    <p>「提示一步」会替你走一步。「一键求解」会演示整套动作。两种操作都可以撤销。</p>
+    <p>拖动空白处移动视图，用双指捏合、滚轮或 ＋ / − 缩放，按 1 回正。求解时也能移动和缩放视图。键盘可用 Q / E 选择节点、方向键移动。</p>
+    <p>「提示一步」会替你走一步。「一键求解」会演示整套动作，过程中可暂停和继续。两种操作都可以撤销。</p>
     <p>计时在首次移动时自动开始，也可以手动开始、暂停或清零。清零只重置用时。解开后自动停表，仍然可以操作棋盘。</p>
     <p>自定义题的「机制」工具可建立多组联动、星盘和共享滑轨。先摆出无冲突布局，再点「打乱题目」，就能得到带已知解的题目。</p>
   </dialog>

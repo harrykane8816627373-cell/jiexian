@@ -12,7 +12,10 @@
   const mechanism = byId('mechanism');
   const editMechanism = byId('edit-mechanism');
   const storageKey = 'jiexian-v2';
-  const generatorRevision = 3;
+  const generatorRevision = 4;
+  const boardInset = 24;
+  const minZoom = .75;
+  const maxZoom = 3.5;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const historyDuration = 240;
   const smoothStep = (t) => t * t * (3 - 2 * t);
@@ -92,6 +95,7 @@
   let history = [];
   let future = [];
   let moving = null;
+  const touches = new Map();
   let selection = -1;
   let view = { x: 0, y: 0, zoom: 1 };
   let animation = null;
@@ -148,6 +152,7 @@
     historyMotion = null;
     suggestion = null;
     moving = null;
+    touches.clear();
     board.classList.remove('dragging');
     board.style.cursor = '';
     level = next;
@@ -201,7 +206,7 @@
       editing ? '自己布置节点和连线，再试玩或求解。' : '拖动红色节点，让冲突连线恢复为实线。';
     board.setAttribute('aria-label', editing ? '自定义题编辑棋盘' : '解线棋盘。用 Q 或 E 选择节点，用方向键移动。');
     byId('anchor-legend').hidden = !level.ownership.includes(-1);
-    byId('board-help').textContent = editing ? '滚轮缩放 · 选择「移动」可平移' : '拖动空白处平移 · 滚轮缩放 · 键盘用 Q / E 选点';
+    byId('board-help').textContent = editing ? '双指或滚轮缩放 · 选择「移动」可平移' : '拖动空白处平移 · 双指或滚轮缩放';
     byId('draft-count').textContent = `${draft.points.length} / ${puzzles.maxNodes} 个节点`;
   }
 
@@ -223,14 +228,17 @@
   function updateControls() {
     const dragging = moving?.kind === 'node';
     const busy = !!animation || dragging;
-    byId('solve').disabled = busy;
+    byId('solve').disabled = dragging || animation?.singleStep === true;
+    const solveLabel = animation && !animation.singleStep ?
+      (animation.paused ? '继续求解' : '暂停求解') : '一键求解';
+    if (byId('solve-label').textContent !== solveLabel) byId('solve-label').textContent = solveLabel;
     byId('hint').disabled = busy;
     byId('undo').disabled = !history.length || busy;
     byId('redo').disabled = !future.length || busy;
     byId('restart').disabled = busy || (!moves && timerMode === 'idle');
     byId('timer-toggle').textContent = timerMode === 'running' ? '暂停' : timerMode === 'idle' ? '开始' : '继续';
-    byId('zoom-out').disabled = view.zoom <= 0.75 || dragging;
-    byId('zoom-in').disabled = view.zoom >= 2.8 || dragging;
+    byId('zoom-out').disabled = view.zoom <= minZoom || dragging;
+    byId('zoom-in').disabled = view.zoom >= maxZoom || dragging;
     byId('fit').disabled = (view.zoom === 1 && !view.x && !view.y) || dragging;
     byId('draft-undo').disabled = !draftHistory.length || dragging;
     byId('draft-redo').disabled = !draftFuture.length || dragging;
@@ -573,7 +581,7 @@
   }
 
   function randomize(config, run) {
-    const stage = puzzles.generate(config.seed, config.rank, config.count, config.mechanism);
+    const stage = puzzles.generate(config.seed, config.rank, config.count, config.mechanism, config.revision >= generatorRevision);
     if (!stage) return false;
     randomConfig = config;
     tab = 'random';
@@ -612,7 +620,7 @@
     const steps = singleStep ? plan.slice(0, 1) : plan;
     historyMotion = null;
     const before = currentSnapshot();
-    const playback = { state: g.copy(state), index: steps[0].index };
+    const playback = { state: g.copy(state), index: steps[0].index, singleStep, paused: false };
     const duration = reducedMotion.matches ? 0 : steps.length === 1 ? 480 : Math.min(320, 4800 / steps.length);
     animation = playback;
     hover = -1;
@@ -620,9 +628,23 @@
     updateControls();
     let step = 0;
     let started = performance.now();
+    let lastFrame = started;
+    let pending = 0;
     let from = playback.state[steps[0].index];
+    playback.togglePause = () => {
+      if (playback.paused) {
+        const now = performance.now();
+        started += now - lastFrame;
+        lastFrame = now;
+        pending = requestAnimationFrame(tick);
+      } else cancelAnimationFrame(pending);
+      playback.paused = !playback.paused;
+      setStatus(playback.paused ? '求解已暂停。' : '正在逐步解开…');
+      updateControls();
+    };
     function tick(now) {
-      if (animation !== playback) return;
+      if (animation !== playback || playback.paused) return;
+      lastFrame = now;
       while (step < steps.length) {
         const move = steps[step];
         const part = duration ? g.clamp((now - started) / duration, 0, 1) : 1;
@@ -631,7 +653,7 @@
         playback.state[move.index] = part === 1 ? move.value : g.mixValue(level.controls[move.index], from, move.value, smooth);
         if (part < 1) {
           render();
-          requestAnimationFrame(tick);
+          pending = requestAnimationFrame(tick);
           return;
         }
         step++;
@@ -643,11 +665,12 @@
       suggestion = singleStep ? plan.slice(1) : null;
       completeMove(before, steps.length, true, singleStep ? '已提示一步，可以继续拖动。' : '');
     }
-    requestAnimationFrame(tick);
+    pending = requestAnimationFrame(tick);
   }
 
   function transform() {
-    const fit = Math.min(Math.max(1, size.w - 22) / g.width, Math.max(1, size.h - 35) / g.height);
+    const fit = Math.min(Math.max(1, size.w - 12) / (g.width - 2 * boardInset),
+      Math.max(1, size.h - 12) / (g.height - 2 * boardInset));
     return { k: fit * view.zoom, x: size.w / 2 + view.x, y: size.h / 2 + view.y };
   }
 
@@ -661,15 +684,19 @@
     return [event.clientX - rect.left, event.clientY - rect.top];
   }
 
-  function zoom(factor, point = [size.w / 2, size.h / 2]) {
-    if (moving?.kind === 'node') return;
-    const old = view.zoom;
-    view.zoom = g.clamp(old * factor, 0.75, 2.8);
-    const ratio = view.zoom / old;
-    view.x = g.clamp(point[0] - size.w / 2 - (point[0] - size.w / 2 - view.x) * ratio, -size.w * .75, size.w * .75);
-    view.y = g.clamp(point[1] - size.h / 2 - (point[1] - size.h / 2 - view.y) * ratio, -size.h * .75, size.h * .75);
+  function setView(x, y, zoom = view.zoom) {
+    view = { x: g.clamp(x, -size.w * .75, size.w * .75), y: g.clamp(y, -size.h * .75, size.h * .75), zoom };
     updateControls();
     render();
+  }
+
+  function zoom(factor, from = [size.w / 2, size.h / 2], to = from) {
+    if (moving?.kind === 'node') return;
+    const nextZoom = g.clamp(view.zoom * factor, minZoom, maxZoom);
+    const ratio = nextZoom / view.zoom;
+    const cx = size.w / 2;
+    const cy = size.h / 2;
+    setView(to[0] - cx - (from[0] - cx - view.x) * ratio, to[1] - cy - (from[1] - cy - view.y) * ratio, nextZoom);
   }
 
   function resetView() {
@@ -717,13 +744,45 @@
     return found;
   }
 
+  function pinchSample() {
+    const [a, b] = touches.values();
+    return { center: g.interpolate(a, b, .5), distance: Math.max(1, g.distance(a, b)) };
+  }
+
+  function beginPointer(action) {
+    moving = action;
+    hover = -1;
+    selection = -1;
+    board.classList.add('dragging');
+    updateControls();
+    render();
+  }
+
   board.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || moving || animation || historyMotion) return;
+    if (event.button !== 0) return;
+    const touch = event.pointerType === 'touch';
+    const id = event.pointerId;
+    if (moving && (!touch || (!touches.size && moving.kind !== 'pinch'))) return;
     const at = local(event);
+    if (touch) {
+      touches.set(id, at);
+      board.setPointerCapture(id);
+      if (touches.size >= 2) {
+        if (moving?.kind === 'node') state = moving.before.state;
+        beginPointer({ kind: 'pinch', sample: pinchSample() });
+        return;
+      }
+    }
+    if (animation || historyMotion) {
+      if (!touch) board.setPointerCapture(id);
+      beginPointer({ kind: 'pan', at, id });
+      return;
+    }
     const point = toWorld(at);
-    const node = hitTest(point, event.pointerType === 'touch');
+    const node = hitTest(point, touch);
     if (editing && activeTool !== 'move') {
-      editAt(point, node);
+      if (touch) moving = { kind: 'editTap', at, id };
+      else editAt(point, node);
       return;
     }
     if (node !== -1 && level.ownership[node] === -1) {
@@ -732,46 +791,69 @@
     }
     if (node !== -1) {
       const index = level.ownership[node];
-      moving = { kind: 'node', node, index, point, before: currentSnapshot(), id: event.pointerId };
+      beginPointer({ kind: 'node', node, index, point, before: currentSnapshot(), id });
     } else {
-      moving = { kind: 'pan', at, x: view.x, y: view.y, id: event.pointerId };
+      beginPointer({ kind: 'pan', at, id });
     }
-    selection = -1;
-    board.setPointerCapture(event.pointerId);
-    board.classList.add('dragging');
-    updateControls();
-    render();
+    if (!touch) board.setPointerCapture(id);
   });
 
   board.addEventListener('pointermove', (event) => {
-    if (animation || historyMotion) return;
+    const touch = event.pointerType === 'touch';
     const at = local(event);
-    const point = toWorld(at);
+    if (touches.has(event.pointerId)) touches.set(event.pointerId, at);
+    if (moving?.kind === 'pinch') {
+      if (!touches.has(event.pointerId)) return;
+      const previous = moving.sample;
+      moving.sample = pinchSample();
+      zoom(moving.sample.distance / previous.distance, previous.center, moving.sample.center);
+      return;
+    }
     if (!moving) {
-      if (event.pointerType === 'touch') return;
-      const found = hitTest(point, false);
+      if (touch || animation || historyMotion) return;
+      const found = hitTest(toWorld(at), false);
       if (hover === found) return;
       hover = found;
       board.style.cursor = editing && activeTool !== 'move' ? 'crosshair' : hover !== -1 && level.ownership[hover] === -1 ? 'default' : 'grab';
     } else if (moving.id === event.pointerId) {
+      if (moving.kind === 'editTap') {
+        if (g.distance(at, moving.at) < 8) return;
+        beginPointer({ ...moving, kind: 'pan' });
+      }
       if (moving.kind === 'pan') {
-        view.x = g.clamp(moving.x + at[0] - moving.at[0], -size.w * .75, size.w * .75);
-        view.y = g.clamp(moving.y + at[1] - moving.at[1], -size.h * .75, size.h * .75);
-        updateControls();
+        setView(view.x + at[0] - moving.at[0], view.y + at[1] - moving.at[1]);
+        moving.at = at;
       } else {
         const { node, index, before } = moving;
-        state[index] = g.dragValue(level, node, point, before.state[index], moving.point);
-        if (!editing && timerMode === 'idle' && g.moveDistance(level.controls[index], before.state[index], state[index]) >= 2) startClock();
+        state[index] = g.dragValue(level, node, toWorld(at), before.state[index], moving.point);
+        if (!touch && !editing && timerMode === 'idle' && g.moveDistance(level.controls[index], before.state[index], state[index]) >= 2) startClock();
       }
     }
     render();
   });
 
   function finishPointer(event) {
+    const ended = touches.delete(event.pointerId);
+    if (moving?.kind === 'pinch') {
+      if (!ended) return;
+      if (touches.size >= 2) moving.sample = pinchSample();
+      else if (touches.size) {
+        const [[id, at]] = touches;
+        moving = { kind: 'pan', at, id };
+      } else {
+        moving = null;
+        board.classList.remove('dragging');
+      }
+      return;
+    }
     if (!moving || event.pointerId !== moving.id) return;
     const action = moving;
     moving = null;
     board.classList.remove('dragging');
+    if (action.kind === 'editTap' && event.type === 'pointerup' && !animation && !historyMotion) {
+      const point = toWorld(action.at);
+      editAt(point, hitTest(point, true));
+    }
     if (action.kind === 'node') {
       const previous = action.before.state[action.index];
       const changed = g.moveDistance(level.controls[action.index], previous, state[action.index]) >= 2;
@@ -835,9 +917,9 @@
 
   function conflictDash(a, b, trimA, trimB, scale) {
     const visible = g.distance(a, b) - trimA - trimB;
-    if (visible <= 0) return { pattern: [8 / scale, 7 / scale], phase: 0 };
-    const period = visible / Math.max(1, Math.round(visible * scale / 15));
-    const gap = Math.min(7 / scale, period / 2);
+    if (visible <= 0) return { pattern: [5 / scale, 4 / scale], phase: 0 };
+    const period = visible / Math.max(1, Math.round(visible * scale / 9));
+    const gap = Math.min(4.5 / scale, period / 2);
     const dash = period - gap;
     // Start and finish at the center of a dash so even a short visible edge has a gap.
     return { pattern: [dash, gap], phase: dash / 2 - trimA };
@@ -864,7 +946,7 @@
     ctx.lineWidth = 1 / k;
     ctx.strokeStyle = '#e3e3e0';
     ctx.beginPath();
-    ctx.roundRect(24, 26, g.width - 48, g.height - 52, 15);
+    ctx.roundRect(boardInset, boardInset, g.width - 2 * boardInset, g.height - 2 * boardInset, 15);
     ctx.stroke();
     ctx.lineCap = 'round';
 
@@ -885,7 +967,11 @@
     const tracks = new Set();
     shownLevel.controls.forEach((control) => {
       if (control.kind === 'rotor') {
-        const orbits = [...new Set(control.members.map((node) => Math.round(g.distance(points[node], control.center) / 6) * 6))];
+        const orbits = [];
+        for (const node of control.members) {
+          const radius = g.distance(points[node], control.center);
+          if (!orbits.some((orbit) => Math.abs(orbit - radius) < 4)) orbits.push(radius);
+        }
         circle(control.center, Math.max(...orbits) + 23, '#f6f6f485', '#b0b0ab');
         ctx.setLineDash([4, 7]);
         orbits.forEach((orbit) => circle(control.center, orbit, null, '#a3a39d'));
@@ -946,9 +1032,9 @@
         line(from, to, '#111111');
       }
     });
-    const conflictWidth = Math.max(2.8, 2.35 / k);
+    const conflictWidth = Math.max(1.65, 1.35 / k);
     ctx.lineCap = 'butt';
-    for (const [color, width] of [['#fff', conflictWidth + 2.4 / k], ['#111111', conflictWidth]]) {
+    for (const [color, width] of [['#fff', conflictWidth + 1 / k], ['#696966', conflictWidth]]) {
       ctx.lineWidth = width;
       for (const { from, to, opacity, pattern, phase } of conflicts) {
         ctx.globalAlpha = opacity;
@@ -1067,7 +1153,10 @@
   byId('solve-draft').addEventListener('click', () => startDraft(true));
   byId('play-draft').addEventListener('click', () => startDraft(false));
   byId('rules').addEventListener('click', () => byId('rules-dialog').showModal());
-  byId('solve').addEventListener('click', () => animate(false));
+  byId('solve').addEventListener('click', () => {
+    if (animation) animation.togglePause();
+    else animate(false);
+  });
   byId('hint').addEventListener('click', () => animate(true));
   byId('undo').addEventListener('click', () => stepHistory(false));
   byId('redo').addEventListener('click', () => stepHistory(true));
@@ -1114,7 +1203,7 @@
   const config = saved.random?.config;
   const valid = config && Object.hasOwn(puzzles.difficulty, config.rank) && Object.hasOwn(puzzles.modes, config.mechanism) &&
     Number.isInteger(config.count) && config.count >= puzzles.minNodes && config.count <= puzzles.maxNodes && Number.isInteger(config.seed);
-  if (valid && config.revision !== generatorRevision) {
+  if (valid && ![3, generatorRevision].includes(config.revision)) {
     const count = config.auto ? puzzles.defaultCount(config.rank, config.mechanism) : config.count;
     createRandom(config.rank, count, config.mechanism, config.auto);
   } else if (valid) randomize(config, saved.random);
