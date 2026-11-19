@@ -113,6 +113,7 @@
     const badNodes = new Set();
     const badObstacles = new Set();
     const spacing = level.radius ?? radius;
+    const nodeSpacing = spacing * (33 / 14);
     let count = 0;
     const markEdge = (i) => {
       badEdges.add(i);
@@ -120,7 +121,7 @@
     };
     points.forEach((p, i) => {
       for (let j = 0; j < i; j++) {
-        if (distance(p, points[j]) >= spacing * (33 / 14)) continue;
+        if (distance(p, points[j]) >= nodeSpacing) continue;
         badNodes.add(i);
         badNodes.add(j);
         count++;
@@ -135,6 +136,7 @@
     level.edges.forEach(([i, j], edge) => {
       const a = points[i];
       const b = points[j];
+      if (distance(a, b) < nodeSpacing) badEdges.add(edge);
       points.forEach((p, k) => {
         if (k === i || k === j || distanceToSegment(p, a, b) >= spacing * (19 / 14)) return;
         badNodes.add(k);

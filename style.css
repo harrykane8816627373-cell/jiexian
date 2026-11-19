@@ -72,10 +72,10 @@ h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; l
 .board-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px 16px; border-top: 1px solid var(--border); padding: 13px 17px; color: var(--dim); background: var(--soft); font-size: 11px; line-height: 1.2; }
 .legend { display: flex; align-items: center; gap: 17px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.legend i { display: inline-block; width: 14px; }
+.legend i { display: inline-block; width: 22px; }
 .legend .clear-line { border-top: 2px solid #111; }
-.legend .cross-line { border-top: 2px dashed #111; }
-.legend .anchor-mark { height: 13px; background: #4a4a49; color: white; text-align: center; line-height: 12px; border-radius: 3px; font-size: 12px; font-style: normal; }
+.legend .cross-line { height: 3px; background: repeating-linear-gradient(90deg, #111 0 5px, transparent 5px 9px); }
+.legend .anchor-mark { width: 14px; height: 13px; background: #4a4a49; color: white; text-align: center; line-height: 12px; border-radius: 3px; font-size: 12px; font-style: normal; }
 
 .sidebar { display: grid; gap: 16px; }
 .panel { padding: 18px; }

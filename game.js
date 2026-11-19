@@ -833,6 +833,16 @@
   });
   board.addEventListener('blur', () => { selection = -1; render(); });
 
+  function conflictDash(a, b, trimA, trimB, scale) {
+    const visible = g.distance(a, b) - trimA - trimB;
+    if (visible <= 0) return { pattern: [8 / scale, 7 / scale], phase: 0 };
+    const period = visible / Math.max(1, Math.round(visible * scale / 15));
+    const gap = Math.min(7 / scale, period / 2);
+    const dash = period - gap;
+    // Start and finish at the center of a dash so even a short visible edge has a gap.
+    return { pattern: [dash, gap], phase: dash / 2 - trimA };
+  }
+
   function draw(now) {
     frame = 0;
     const motion = sampleHistoryMotion(now);
@@ -845,6 +855,7 @@
     if (!motion) updateStats(faults.count);
     if (!size.w || !size.h) return;
     const { k, x, y } = transform();
+    const r = Math.max(g.radius, 8 / k);
     ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
     ctx.clearRect(0, 0, size.w, size.h);
     ctx.translate(x, y);
@@ -917,15 +928,38 @@
       }
     }
 
-    for (const drawBad of [false, true]) {
-      ctx.lineWidth = Math.max(2.15, 1.35 / k);
-      ctx.setLineDash(drawBad ? [7 / k, 5 / k] : []);
-      shownLevel.edges.forEach(([a, b], i) => {
-        ctx.globalAlpha = motion?.opacity ? Math.min(motion.opacity[a], motion.opacity[b]) : 1;
-        if (faults.badEdges.has(i) === drawBad) line(points[a], points[b], '#111111');
-      });
+    const conflicts = [];
+    const nodeRim = r + 1.5 / k;
+    ctx.lineWidth = Math.max(2.15, 1.35 / k);
+    shownLevel.edges.forEach(([a, b], i) => {
+      const from = points[a];
+      const to = points[b];
+      const opacity = motion?.opacity ? Math.min(motion.opacity[a], motion.opacity[b]) : 1;
+      if (faults.badEdges.has(i)) {
+        const dx = Math.abs(to[0] - from[0]);
+        const dy = Math.abs(to[1] - from[1]);
+        const squareRim = dx || dy ? nodeRim * Math.hypot(dx, dy) / Math.max(dx, dy) : nodeRim;
+        const trim = (node) => shownLevel.ownership[node] === -1 ? squareRim : nodeRim;
+        conflicts.push({ from, to, opacity, ...conflictDash(from, to, trim(a), trim(b), k) });
+      } else {
+        ctx.globalAlpha = opacity;
+        line(from, to, '#111111');
+      }
+    });
+    const conflictWidth = Math.max(2.8, 2.35 / k);
+    ctx.lineCap = 'butt';
+    for (const [color, width] of [['#fff', conflictWidth + 2.4 / k], ['#111111', conflictWidth]]) {
+      ctx.lineWidth = width;
+      for (const { from, to, opacity, pattern, phase } of conflicts) {
+        ctx.globalAlpha = opacity;
+        ctx.setLineDash(pattern);
+        ctx.lineDashOffset = phase;
+        line(from, to, color);
+      }
     }
     ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
+    ctx.lineCap = 'round';
     points.forEach((point, node) => {
       const [px, py] = point;
       ctx.globalAlpha = motion?.opacity?.[node] ?? 1;
@@ -934,7 +968,6 @@
       const kind = control?.kind ?? 'fixed';
       const picked = node === selection || node === editorOrigin ||
         editing && mechanismDraft.members.includes(node) || moving?.kind === 'node' && index === moving.index || animation?.index === index;
-      const r = Math.max(g.radius, 8 / k);
       const color = faults.badNodes.has(node) ? '#c32e37' : '#287646';
       ctx.lineWidth = 1.5 / k;
       if (kind === 'fixed') {
