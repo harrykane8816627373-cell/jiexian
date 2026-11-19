@@ -6,11 +6,12 @@ const { gunzipSync } = require('node:zlib');
 require('../engine.js');
 require('../planarity.js');
 require('../puzzles.js');
+require('../solver-geometry.js');
 require('../exact-solver.js');
 
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
-const { solveExact } = globalThis.JiexianExact;
+const { prepareExact, solveExact } = globalThis.JiexianExact;
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -72,6 +73,64 @@ test('small rail instances agree with exhaustive enumeration of their feasible i
       assert.equal(exact(level).status, hasSolution ? 'solved' : 'unsat', `anchors at ${left}, ${right}`);
     }
   }
+});
+
+test('one shared horizontal track packs both sides of an open exclusion without any SMT call', () => {
+  const level = (end) => {
+    const points = [[260, 270], [290, 270], [330, 270], [370, 270], [316, 270], [100, 435], [800, 435]];
+    return g.createLevel({ points, edges: [[5, 6]], controls: points.slice(0, 4).map((_, i) =>
+      i % 2 ? g.rail(i, [end, 270], [250, 270], .5) : g.rail(i, [250, 270], [end, 270], .5)) });
+  };
+  const puzzle = level(382);
+  const proof = prepareExact(puzzle);
+  checkSolution(puzzle, proof);
+  assert.deepEqual(g.positions(puzzle, proof.state).slice(0, 4), [[250, 270], [283, 270], [349, 270], [382, 270]]);
+  assert.equal(prepareExact(level(381.999)).status, 'unsat');
+});
+
+test('shared oblique tracks use exact squared capacity before any SMT call', () => {
+  const track = (edge) => {
+    const a = [100, 100], b = [100 + edge, 100 + edge];
+    return g.createLevel({ points: [a, a, b], edges: [], controls: [g.rail(0, a, b, 0),
+      g.rail(1, a, b, 0), g.rail(2, b, a, 0)] });
+  };
+  checkSolution(track(48), prepareExact(track(48)));
+  assert.equal(prepareExact(track(46)).status, 'unsat');
+});
+
+test('off-axis obstacle roots can be enclosed without losing a possible rail solution', () => {
+  const level = (start, end) => {
+    const a = [start, 200], b = [end, 200];
+    return g.createLevel({ points: [a, a], edges: [], obstacles: [{ center: [300, 222], r: 24 }],
+      controls: [g.rail(0, a, b, 0), g.rail(1, a, b, 0)] });
+  };
+  const puzzle = level(260, 340);
+  checkSolution(puzzle, prepareExact(puzzle));
+  assert.equal(prepareExact(level(265, 335)).status, 'unsat');
+});
+
+test('a fixed anchor separates overlapping track domains before nonlinear partitioning', () => {
+  const level = puzzles.authored({
+    points: [[275, 200], [240, 200], [260, 200], [150, 250], [380, 250]],
+    edges: [[0, 3], [1, 4]],
+    fixed: [2, 3, 4],
+    groups: [{ kind: 'rail', members: [0], a: [150, 200], b: [275, 200] },
+      { kind: 'rail', members: [1], a: [240, 200], b: [380, 200] }],
+    obstacles: [{ center: [190, 227], r: 24 }, { center: [330, 227], r: 24 }],
+  });
+  const problem = prepareExact(level);
+  assert.equal(problem.status, 'ready');
+  assert.deepEqual(problem.parts.map(({ controls }) => controls), [[0], [1]]);
+  const result = exact(level);
+  checkSolution(level, result);
+  assert.ok(g.positions(level, result.state)[0][0] <= 227);
+  assert.ok(g.positions(level, result.state)[1][0] >= 293);
+});
+
+test('a crossing inside one rigid rotor is an immediate contradiction', () => {
+  const points = [[250, 150], [350, 250], [350, 150], [250, 250]];
+  const level = g.createLevel({ points, edges: [[0, 1], [2, 3]], controls: [g.rotor([0, 1, 2, 3], [300, 200], 0)] });
+  assert.equal(prepareExact(level).status, 'unsat');
 });
 
 test('fixed crossings, node-to-edge collisions and segment-to-obstacle collisions are unsatisfiable', () => {

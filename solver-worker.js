@@ -1,6 +1,6 @@
 'use strict';
 
-importScripts('./engine.js?v=7', './planarity.js?v=3', './puzzles.js?v=11', './exact-solver.js?v=1');
+importScripts('./engine.js?v=7', './planarity.js?v=3', './puzzles.js?v=11', './solver-geometry.js?v=1', './exact-solver.js?v=2');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');
@@ -21,16 +21,26 @@ async function loadZ3() {
 
 self.onmessage = async ({ data: { puzzle, current } }) => {
   try {
+    const { prepareExact, solveExact } = globalThis.JiexianExact;
+    const problem = prepareExact(puzzle);
+    if (problem.status === 'solved' || problem.status === 'unsat') {
+      self.postMessage(problem);
+      return;
+    }
     const state = globalThis.JiexianPuzzles.searchDraft(puzzle, current);
     if (state) {
       self.postMessage({ status: 'solved', state });
+      return;
+    }
+    if (problem.status !== 'ready') {
+      self.postMessage(problem);
       return;
     }
     self.postMessage({ status: 'exact' });
     const z3 = await loadZ3();
     const context = z3.init();
     try {
-      self.postMessage(globalThis.JiexianExact.solveExact(puzzle, (command) => z3.ask(context, command)));
+      self.postMessage(solveExact(puzzle, (command) => z3.ask(context, command), problem));
     } finally {
       z3.destroy(context);
     }

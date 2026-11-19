@@ -2,6 +2,7 @@
   'use strict';
 
   const g = globalThis.Jiexian;
+  const { analyze } = globalThis.JiexianSolverGeometry;
   const call = (op, ...args) => `(${op} ${args.join(' ')})`;
   const add = (...args) => call('+', ...args);
   const sub = (a, b) => call('-', a, b);
@@ -45,18 +46,20 @@
     return or(and(call('>=', u, '0'), call('>=', v, '0')), and(call('<=', u, '0'), call('<=', v, '0')));
   }
 
-  function buildModel(level) {
+  function buildModel(level, coordinates, railBounds, part) {
     const setup = ['(set-logic QF_NRA)', '(set-option :produce-models true)',
       '(set-option :pp.decimal true)', '(set-option :pp.decimal_precision 30)'];
-    const constraints = [];
     const define = (name, sort, expr) => {
       setup.push(`(define-fun ${name} () ${sort} ${expr})`);
       return name;
     };
-    const points = level.points.map((point) => point.map(real));
+    const points = coordinates.map((point) => point.map(real));
     const assert = (expr) => setup.push(call('assert', expr));
-    const bounded = (name, lower, upper) => assert(and(call('<=', real(lower), name), call('<=', name, real(upper))));
-    const controls = level.controls.map((control, i) => {
+    const bounded = (name, lower, upper) => assert(lower === upper ? call('=', name, lower) :
+      and(call('<=', lower, name), call('<=', name, upper)));
+    const fraction = ([n, d]) => n === 0n ? '0' : n === d ? '1' : call('/', String(n), String(d));
+    const controls = part.controls.map((i) => {
+      const control = level.controls[i];
       const { kind, members: [node, partner] } = control;
       const names = kind === 'rail' ? [`x${i}`] : [`x${i}`, `y${i}`];
       for (const name of names) setup.push(`(declare-const ${name} Real)`);
@@ -70,51 +73,28 @@
           points[member] = [add(center[0], sub(mul(dx, x), mul(dy, y))), add(center[1], mul(dx, y), mul(dy, x))];
         }
       } else if (kind === 'rail') {
-        bounded(x, 0, 1);
+        const [lo, hi] = railBounds[i]?.map(fraction) ?? ['0', '1'];
+        bounded(x, lo, hi);
         points[node] = control.a.map((start, axis) => add(real(start), mul(x, sub(real(control.b[axis]), real(start)))));
       } else {
         points[node] = names;
         if (kind === 'mirror') points[partner] = control.sum.map((sum, axis) => sub(real(sum), names[axis]));
         for (const member of control.members) {
-          bounded(points[member][0], g.margin, g.width - g.margin);
-          bounded(points[member][1], g.margin, g.height - g.margin);
+          bounded(points[member][0], real(g.margin), real(g.width - g.margin));
+          bounded(points[member][1], real(g.margin), real(g.height - g.margin));
         }
       }
-      return names;
+      for (const member of control.members) {
+        points[member] = points[member].map((expr, axis) => define(`p${member}_${axis}`, 'Real', expr));
+      }
+      return { index: i, names };
     });
 
-    points.forEach((point, i) => {
-      if (level.ownership[i] === -1) return;
-      points[i] = point.map((expr, axis) => define(`p${i}_${axis}`, 'Real', expr));
-    });
-    const clearance = g.clearances(level);
-    const requireClear = (nodes, formula) => {
-      const name = define(`clear${constraints.length}`, 'Bool', formula);
-      constraints.push({ name, fixed: nodes.every((node) => level.ownership[node] === -1) });
-    };
-    const separated = (a, b, distance) => call('>=', normSquared(vector(a, b)), square(real(distance)));
-    points.forEach((point, i) => {
-      for (let j = 0; j < i; j++) requireClear([i, j], separated(point, points[j], clearance.nodes));
-      for (const { center, r } of level.obstacles) {
-        requireClear([i], separated(point, center.map(real), r + clearance.spacing + clearance.obstacleGap));
-      }
-    });
-    level.edges.forEach(([i, j], edge) => {
-      const a = points[i];
-      const b = points[j];
-      points.forEach((p, k) => {
-        if (k !== i && k !== j) requireClear([i, j, k], segmentClear(p, a, b, clearance.nodeEdge));
-      });
-      for (const { center, r } of level.obstacles) {
-        requireClear([i, j], segmentClear(center.map(real), a, b, r + clearance.obstacleGap));
-      }
-      for (let other = 0; other < edge; other++) {
-        const [k, l] = level.edges[other];
-        if (i === k || i === l || j === k || j === l) continue;
-        const c = points[k];
-        const d = points[l];
-        requireClear([i, j, k, l], or(sameSide(a, b, c, d), sameSide(c, d, a, b)));
-      }
+    const constraints = part.records.map(({ kind, vertices, distance, support }, i) => {
+      const [a, b, c, d] = vertices.map((node) => points[node]);
+      const formula = kind === 'distance' ? call('>=', normSquared(vector(a, b)), square(real(distance))) :
+        kind === 'segment' ? segmentClear(c, a, b, distance) : or(sameSide(a, b, c, d), sameSide(c, d, a, b));
+      return { name: define(`clear${i}`, 'Bool', formula), unary: support.length === 1 };
     });
     return { setup, constraints, controls };
   }
@@ -136,23 +116,20 @@
     return negative ? -number : number;
   }
 
-  function solveExact(level, ask) {
-    const { setup, constraints, controls } = buildModel(level);
-    const query = (command) => {
-      const reply = ask(command).trim();
-      if (reply.startsWith('(error')) throw new Error(reply);
-      return reply;
+  function solvePart(level, coordinates, railBounds, part, query, state) {
+    const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part);
+    const pending = constraints.filter(({ unary }) => !unary).map(({ name }) => name);
+    const enforce = (names) => {
+      for (let i = 0; i < names.length; i += 256) {
+        query(names.slice(i, i + 256).map((name) => call('assert', name)).join('\n'));
+      }
     };
-    const pending = constraints.filter(({ fixed }) => !fixed).map(({ name }) => name);
-    const enforce = (names) => names.forEach((name) => query(call('assert', name)));
-
     for (let i = 0; i < setup.length; i += 64) query(setup.slice(i, i + 64).join('\n'));
-    enforce(constraints.filter(({ fixed }) => fixed).map(({ name }) => name));
+    enforce(constraints.filter(({ unary }) => unary).map(({ name }) => name));
     while (true) {
       // Use NLSat on every relaxation, including after adding assertions.
       const result = query('(check-sat-using qfnra-nlsat)');
-      if (result === 'unsat') return { status: 'unsat' };
-      if (result !== 'sat') return { status: 'unknown' };
+      if (result !== 'sat') return result === 'unsat' ? 'unsat' : 'unknown';
 
       // Test omitted predicates on the exact algebraic model, never on rounded coordinates.
       const conflicts = new Set();
@@ -163,16 +140,13 @@
         }
       }
       if (!conflicts.size) {
-        const variables = controls.flat();
-        const values = modelValues(query, variables);
-        const state = controls.map((names, i) => {
+        const values = modelValues(query, controls.flatMap(({ names }) => names));
+        for (const { index, names } of controls) {
           const value = names.map((name) => numberFromModel(values.get(name)));
-          return g.normalize(level.controls[i], level.controls[i].kind === 'rotor' ? [Math.atan2(value[1], value[0])] : value);
-        });
-        if (!g.evaluate(level, g.positions(level, state)).count) return { status: 'solved', state };
-        query('(set-option :pp.decimal false)');
-        const model = variables.length ? query(`(get-value (${variables.join(' ')}))`) : '()';
-        return { status: 'precision', model };
+          const control = level.controls[index];
+          state[index] = g.normalize(control, control.kind === 'rotor' ? [Math.atan2(value[1], value[0])] : value);
+        }
+        return 'sat';
       }
       enforce([...conflicts]);
       let remaining = 0;
@@ -183,5 +157,46 @@
     }
   }
 
-  globalThis.JiexianExact = { solveExact };
+  const playable = (level, state) => !g.evaluate(level, g.positions(level, state)).count;
+
+  function prepareExact(level) {
+    const problem = analyze(level);
+    if (problem.unsat) return { status: 'unsat' };
+    const state = level.initial.map((value, i) => g.normalize(level.controls[i], value));
+    for (const [index, value] of problem.packed) state[index] = value;
+    if (!problem.parts.length) {
+      if (playable(level, state)) return { status: 'solved', state };
+      if (!problem.packingParts.length) return { status: 'precision' };
+    }
+    return { status: 'ready', ...problem, state };
+  }
+
+  function solveExact(level, ask, problem = prepareExact(level)) {
+    if (problem.status !== 'ready') return problem;
+    const { coordinates, railBounds, parts, packingParts } = problem;
+    const state = g.copy(problem.state);
+    let checks = 0;
+    const query = (command) => {
+      const reply = ask(command).trim();
+      if (reply.startsWith('(error')) throw new Error(reply);
+      return reply;
+    };
+    const solve = (part) => {
+      if (checks++) query('(reset)');
+      return solvePart(level, coordinates, railBounds, part, query, state);
+    };
+    let uncertain = false;
+    for (const part of parts) {
+      const result = solve(part);
+      if (result === 'unsat') return { status: 'unsat' };
+      if (result === 'unknown') uncertain = true;
+    }
+    if (uncertain) return { status: 'unknown' };
+    if (playable(level, state)) return { status: 'solved', state };
+    // A greedy boundary position may round into a conflict. Try another model for those parts.
+    for (const part of packingParts) solve(part);
+    return playable(level, state) ? { status: 'solved', state } : { status: 'precision' };
+  }
+
+  globalThis.JiexianExact = { prepareExact, solveExact };
 })();

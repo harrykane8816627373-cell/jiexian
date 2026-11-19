@@ -1,0 +1,118 @@
+const path = require('node:path');
+const { readFileSync } = require('node:fs');
+const { execFileSync, spawnSync } = require('node:child_process');
+const { runInNewContext } = require('node:vm');
+const { gunzipSync } = require('node:zlib');
+
+const repo = path.join(__dirname, '..');
+for (const name of ['engine.js', 'puzzles.js', 'solver-geometry.js', 'exact-solver.js']) require(path.join(repo, name));
+const g = globalThis.Jiexian;
+const puzzles = globalThis.JiexianPuzzles;
+const current = globalThis.JiexianExact;
+const sandbox = { Jiexian: g };
+runInNewContext(execFileSync('git', ['show', '170852e:exact-solver.js'], { cwd: repo, encoding: 'utf8' }), sandbox);
+const previous = sandbox.JiexianExact;
+
+const z3 = require(path.join(repo, 'vendor/z3smt2w.js'))({
+  wasmBinary: gunzipSync(readFileSync(path.join(repo, 'vendor/z3smt2w.wasm.gz'))), noInitialRun: true,
+});
+const init = z3.cwrap('smt2Init', 'number', []);
+const ask = z3.cwrap('smt2Ask', 'string', ['number', 'string']);
+const destroy = z3.cwrap('smt2Destroy', null, ['number']);
+
+function run(solver, level) {
+  let context, checks = 0;
+  const start = performance.now();
+  try {
+    const result = solver.solveExact(level, (command) => {
+      context ??= init();
+      if (command === '(check-sat-using qfnra-nlsat)') checks++;
+      return ask(context, command);
+    });
+    return { time: performance.now() - start, status: result.status, checks };
+  } finally {
+    if (context != null) destroy(context);
+  }
+}
+
+function narrow() {
+  return puzzles.authored({
+    points: [[250, 270], [234, 270], [283.124, 270], [349.126, 270], [100, 435], [800, 435]],
+    edges: [[4, 5]], fixed: [1, 2, 3, 4, 5], obstacles: [],
+    groups: [{ kind: 'rail', members: [0], a: [250, 270], b: [350, 270] }],
+  });
+}
+
+function packing(rows, perTrack) {
+  const points = [], controls = [];
+  for (let i = 0; i < rows; i++) {
+    const x = i % 2 ? 600 : 90, y = 100 + Math.floor(i / 2) * 150;
+    const a = rows === 1 ? [42, y] : [x, y];
+    const b = rows === 1 ? [858, y] : [x + 180, y];
+    for (let node = 0; node < perTrack; node++) {
+      controls.push(g.rail(points.length, a, b, .5));
+      points.push(g.interpolate(a, b, .5));
+    }
+    if (rows > 1) points.push([x + 90, y]);
+  }
+  points.push([100, 490], [800, 490]);
+  return g.createLevel({ points, edges: [[points.length - 2, points.length - 1]], controls });
+}
+
+function contraction(rows, movingEdges = false) {
+  const points = [], controls = [], obstacles = [], edges = [];
+  for (let i = 0; i < rows; i++) {
+    const y = 75 + 112 * i;
+    controls.push(g.rail(points.length, [150, y], [275, y], 1),
+      g.rail(points.length + 1, [240, y], [380, y], 0));
+    points.push([275, y], [240, y], [260, y]);
+    obstacles.push({ center: [190, y + 27], r: 24 }, { center: [330, y + 27], r: 24 });
+    if (movingEdges) {
+      const next = points.length;
+      points.push([150, y + 50], [380, y + 50]);
+      edges.push([next - 3, next], [next - 2, next + 1]);
+    }
+  }
+  return g.createLevel({ points, edges, obstacles, controls });
+}
+
+function coupled() {
+  return puzzles.authored({
+    points: [[110, 160], [800, 400], [350, 310], [650, 310]],
+    edges: [[0, 1], [2, 3]], fixed: [0, 2, 3],
+    groups: [{ kind: 'rail', members: [1], a: [280, 400], b: [800, 400] }],
+  });
+}
+
+function report(level, solver, repetitions) {
+  const results = Array.from({ length: repetitions }, () => run(solver, level)).sort((a, b) => a.time - b.time);
+  const middle = results[Math.floor(results.length / 2)];
+  return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
+}
+
+const cases = [
+  ['one 0.002-unit gap', narrow(), 11],
+  ['4 pairs of contracted domains', contraction(4), 7],
+  ['4 pairs with moving edges', contraction(4, true), 7],
+  ['6 rails with 18 sliders', packing(6, 3), 5],
+  ['32 sliders on one rail', packing(1, 32), 1],
+  ['one movable crossing', coupled(), 11],
+];
+if (process.argv.length >= 4) {
+  const solver = process.argv[3] === 'before' ? previous : current;
+  run(solver, narrow());
+  const [, level, repeats] = cases[Number(process.argv[2])];
+  console.log(JSON.stringify(report(level, solver, repeats)));
+  process.exit(0);
+}
+for (const [index, [name, level]] of cases.entries()) {
+  const problem = current.prepareExact(level);
+  const result = { name,
+    variables: level.controls.map(({ kind }) => kind === 'rail' ? 1 : 2).reduce((a, b) => a + b, 0),
+    components: problem.parts?.map(({ controls }) => controls.length) ?? [] };
+  for (const tag of ['before', 'after']) {
+    const child = spawnSync(process.execPath, [__filename, String(index), tag], { timeout: 7000, encoding: 'utf8' });
+    result[tag] = child.error ? child.error.code : child.status === 0 ? JSON.parse(child.stdout) : child.stderr.trim();
+  }
+  console.log(JSON.stringify(result));
+}
