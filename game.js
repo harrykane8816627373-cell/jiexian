@@ -14,6 +14,8 @@
   const storageKey = 'jiexian-v2';
   const generatorRevision = 3;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const historyDuration = 240;
+  const smoothStep = (t) => t * t * (3 - 2 * t);
   const turnKeys = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const labels = { free: '自由节点', mirror: '联动节点', rotor: '星盘节点', rail: '滑轨节点' };
   const tools = {
@@ -93,6 +95,7 @@
   let selection = -1;
   let view = { x: 0, y: 0, zoom: 1 };
   let animation = null;
+  let historyMotion = null;
   let suggestion = null;
   let hover = -1;
   let size = { w: 0, h: 0, dpr: 1 };
@@ -142,6 +145,7 @@
 
   function load(next, run) {
     animation = null;
+    historyMotion = null;
     suggestion = null;
     moving = null;
     board.classList.remove('dragging');
@@ -266,14 +270,31 @@
 
   function stepHistory(forward) {
     if (byId(forward ? 'redo' : 'undo').disabled) return;
+    const from = sampleHistoryMotion()?.state ?? state;
     (forward ? history : future).push(currentSnapshot());
     ({ state, moves } = (forward ? future : history).pop());
+    const target = state;
+    const controls = level.controls;
+    startHistoryMotion((t) => ({
+      state: target.map((value, i) => g.mixValue(controls[i], from[i], value, t)),
+    }));
     suggestion = null;
     refreshCompletion();
     setStatus(forward ? '已恢复上一次撤销的操作。' : '已撤销上一次操作。');
     updatePanel();
     save();
     render();
+  }
+
+  function startHistoryMotion(sample) {
+    historyMotion = reducedMotion.matches ? null : { started: performance.now(), sample };
+    hover = -1;
+  }
+
+  function sampleHistoryMotion(now = performance.now()) {
+    if (!historyMotion || reducedMotion.matches) return null;
+    const t = g.clamp((now - historyMotion.started) / historyDuration, 0, 1);
+    return t < 1 ? historyMotion.sample(smoothStep(t)) : null;
   }
 
   function pickTool(tool) {
@@ -287,12 +308,13 @@
     render();
   }
 
-  function replaceDraft(next, remember = true) {
+  function replaceDraft(next, { remember = true, changedNode } = {}) {
     if (remember) {
-      draftHistory.push(draft);
+      draftHistory.push({ draft, changedNode });
       draftFuture.length = 0;
       if (draftHistory.length > 120) draftHistory.shift();
     }
+    historyMotion = null;
     draft = puzzles.rememberAnswer(next);
     level = puzzles.authored(draft);
     state = g.copy(level.initial);
@@ -309,8 +331,39 @@
 
   function stepDraftHistory(forward) {
     if (byId(forward ? 'draft-redo' : 'draft-undo').disabled) return;
-    (forward ? draftHistory : draftFuture).push(draft);
-    replaceDraft((forward ? draftFuture : draftHistory).pop(), false);
+    const previous = level;
+    const from = sampleHistoryMotion()?.draftPoints ?? g.positions(level, state);
+    const next = (forward ? draftFuture : draftHistory).pop();
+    (forward ? draftHistory : draftFuture).push({ draft, changedNode: next.changedNode });
+    replaceDraft(next.draft, { remember: false });
+    if (!reducedMotion.matches) animateDraftHistory(previous, from, next.changedNode);
+  }
+
+  function animateDraftHistory(previous, from, changedNode) {
+    const to = g.positions(level, state);
+    const growing = to.length > from.length;
+    const shrinking = to.length < from.length;
+    const shownLevel = shrinking ? previous : level;
+    const larger = shrinking ? from : to;
+    const isChanging = larger.map((_, i) => (growing || shrinking) && (changedNode === undefined || i === changedNode));
+    const align = (points) => larger.map((point, i) => isChanging[i] ? point : points[i - (i > changedNode ? 1 : 0)]);
+    const start = growing ? align(from) : from;
+    const end = shrinking ? align(to) : to;
+    if (!growing && !shrinking && start.every((point, i) => g.distance(point, end[i]) < .01)) return;
+
+    // Retain mechanism paths when both layouts fit the displayed controls.
+    const fromState = puzzles.projectState(shownLevel, start);
+    const toState = puzzles.projectState(shownLevel, end);
+    const modeledStart = g.positions(shownLevel, fromState);
+    const modeledEnd = g.positions(shownLevel, toState);
+    const fits = start.map((point, i) => g.distance(point, modeledStart[i]) < .1 && g.distance(end[i], modeledEnd[i]) < .1);
+    startHistoryMotion((t) => {
+      const pose = toState.map((value, i) => g.mixValue(shownLevel.controls[i], fromState[i], value, t));
+      const points = g.positions(shownLevel, pose).map((point, i) => fits[i] ? point : g.interpolate(start[i], end[i], t));
+      const opacity = isChanging.map((changing) => changing ? growing ? t : 1 - t : 1);
+      const draftPoints = shrinking ? points.filter((_, i) => !isChanging[i]) : points;
+      return { shownLevel, points, opacity, draftPoints };
+    });
   }
 
   function syncMechanism() {
@@ -463,7 +516,7 @@
         message.textContent = '请与已有节点留一点距离。';
         return;
       }
-      replaceDraft({ ...draft, points: [...draft.points, place] });
+      replaceDraft({ ...draft, points: [...draft.points, place] }, { changedNode: draft.points.length });
     } else if (activeTool === 'edge' && node >= 0) {
       if (editorOrigin < 0 || editorOrigin === node) {
         editorOrigin = editorOrigin === node ? -1 : node;
@@ -489,7 +542,7 @@
         const groups = draft.groups.map((group) => ({
           ...group, members: group.members.filter((n) => n !== node).map(shift),
         })).filter(({ kind, members }) => members.length >= (kind === 'rail' ? 1 : 2));
-        replaceDraft({ ...draft, points, edges, fixed, groups });
+        replaceDraft({ ...draft, points, edges, fixed, groups }, { changedNode: node });
       } else {
         let nearest = 11 / transform().k;
         let chosen = -1;
@@ -557,6 +610,7 @@
     }
     if (timerMode === 'idle') startClock();
     const steps = singleStep ? plan.slice(0, 1) : plan;
+    historyMotion = null;
     const before = currentSnapshot();
     const playback = { state: g.copy(state), index: steps[0].index };
     const duration = reducedMotion.matches ? 0 : steps.length === 1 ? 480 : 320;
@@ -572,7 +626,7 @@
       while (step < steps.length) {
         const move = steps[step];
         const part = duration ? g.clamp((now - started) / duration, 0, 1) : 1;
-        const smooth = part * part * (3 - 2 * part);
+        const smooth = smoothStep(part);
         playback.index = move.index;
         playback.state[move.index] = part === 1 ? move.value : g.mixValue(level.controls[move.index], from, move.value, smooth);
         if (part < 1) {
@@ -664,7 +718,7 @@
   }
 
   board.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || moving || animation) return;
+    if (event.button !== 0 || moving || animation || historyMotion) return;
     const at = local(event);
     const point = toWorld(at);
     const node = hitTest(point, event.pointerType === 'touch');
@@ -690,7 +744,7 @@
   });
 
   board.addEventListener('pointermove', (event) => {
-    if (animation) return;
+    if (animation || historyMotion) return;
     const at = local(event);
     const point = toWorld(at);
     if (!moving) {
@@ -742,7 +796,7 @@
 
   board.addEventListener('keydown', (event) => {
     const key = event.key.toLowerCase();
-    if (event.ctrlKey || event.metaKey || event.altKey || animation || moving) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || animation || historyMotion || moving) return;
     if (key === 'q' || key === 'e') {
       event.preventDefault();
       const order = level.ownership.map((index, node) => index < 0 ? -1 : node).filter((node) => node >= 0);
@@ -779,12 +833,16 @@
   });
   board.addEventListener('blur', () => { selection = -1; render(); });
 
-  function draw() {
+  function draw(now) {
     frame = 0;
-    const active = animation?.state ?? state;
-    const points = g.positions(level, active);
-    const faults = g.evaluate(level, points);
-    updateStats(faults.count);
+    const motion = sampleHistoryMotion(now);
+    if (motion) render();
+    else historyMotion = null;
+    const shownLevel = motion?.shownLevel ?? level;
+    const active = animation?.state ?? motion?.state ?? state;
+    const points = motion?.points ?? g.positions(level, active);
+    const faults = g.evaluate(shownLevel, points);
+    if (!motion) updateStats(faults.count);
     if (!size.w || !size.h) return;
     const { k, x, y } = transform();
     ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
@@ -814,7 +872,7 @@
     };
 
     const tracks = new Set();
-    level.controls.forEach((control) => {
+    shownLevel.controls.forEach((control) => {
       if (control.kind === 'rotor') {
         const orbits = [...new Set(control.members.map((node) => Math.round(g.distance(points[node], control.center) / 6) * 6))];
         circle(control.center, Math.max(...orbits) + 23, '#f6f6f485', '#b0b0ab');
@@ -837,7 +895,7 @@
         ctx.lineWidth = 1 / k;
       }
     });
-    level.obstacles.forEach(({ center, r }, i) => {
+    shownLevel.obstacles.forEach(({ center, r }, i) => {
       const bad = faults.badObstacles.has(i);
       circle(center, r, bad ? '#fcf1f1' : '#f5f5f3', bad ? '#ad4850' : '#96968f');
       ctx.save();
@@ -862,15 +920,17 @@
     for (const drawBad of [false, true]) {
       ctx.lineWidth = Math.max(2.15, 1.35 / k);
       ctx.setLineDash(drawBad ? [7 / k, 5 / k] : []);
-      level.edges.forEach(([a, b], i) => {
+      shownLevel.edges.forEach(([a, b], i) => {
+        ctx.globalAlpha = motion?.opacity ? Math.min(motion.opacity[a], motion.opacity[b]) : 1;
         if (faults.badEdges.has(i) === drawBad) line(points[a], points[b], '#111111');
       });
     }
     ctx.setLineDash([]);
     points.forEach((point, node) => {
       const [px, py] = point;
-      const index = level.ownership[node];
-      const control = level.controls[index];
+      ctx.globalAlpha = motion?.opacity?.[node] ?? 1;
+      const index = shownLevel.ownership[node];
+      const control = shownLevel.controls[index];
       const kind = control?.kind ?? 'fixed';
       const picked = node === selection || node === editorOrigin ||
         editing && mechanismDraft.members.includes(node) || moving?.kind === 'node' && index === moving.index || animation?.index === index;
@@ -908,6 +968,7 @@
         ctx.fillText(label, px, py);
       }
     });
+    ctx.globalAlpha = 1;
   }
 
   function render() {

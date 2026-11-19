@@ -460,5 +460,5 @@
   }
 
   globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, defaultCount, generate, authored, solveDraft,
-    rotorFits, rememberAnswer, scrambleDraft };
+    rotorFits, rememberAnswer, scrambleDraft, projectState };
 })();
