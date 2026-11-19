@@ -4,6 +4,7 @@
   const g = globalThis.Jiexian;
   const minNodes = 4;
   const maxNodes = 36;
+  const revision = 5;
   const difficulty = {
     easy: { label: '简单', nodes: 6, edgeFactor: 1.18, scramble: 0.22, target: 1, active: .58, maxAngle: 1.4, groups: 2, maxTrackNodes: 5 },
     medium: { label: '中等', nodes: 10, edgeFactor: 1.6, scramble: 0.52, target: 3, active: .76, maxAngle: 2.4, groups: 3, maxTrackNodes: 8 },
@@ -42,8 +43,8 @@
     return result;
   }
 
-  function fitGraph(points, count, settings, random) {
-    const edges = count === 2 ? [[0, 1]] : g.cycle(count);
+  function fitGraph(points, count, settings, random, distributed) {
+    const edges = distributed ? [] : count === 2 ? [[0, 1]] : g.cycle(count);
     const graph = { edges, obstacles: [] };
     const tryEdge = (a, b) => {
       if (edges.some(([u, v]) => (a === u && b === v) || (a === v && b === u))) return false;
@@ -53,12 +54,28 @@
       return false;
     };
     if (g.evaluate(graph, points).count) return null;
-    for (let a = count; a < points.length; a++) {
-      const candidates = points.map((_, i) => i).filter((b) => b < a)
-        .sort((b, c) => g.distance(points[a], points[b]) - g.distance(points[a], points[c]));
-      if (!candidates.some((b) => tryEdge(a, b))) return null;
-    }
     const choices = points.flatMap((_, a) => points.slice(a + 1).map((__, i) => [a, a + i + 1]));
+    if (distributed) {
+      // Connect nearby nodes throughout the board before adding more edges.
+      const components = points.map((_, i) => i);
+      const nearby = choices.map(([a, b]) => ({ a, b, length: g.distance(points[a], points[b]) }))
+        .sort((left, right) => left.length - right.length);
+      for (const { a, b } of nearby) {
+        const left = components[a], right = components[b];
+        if (left === right || !tryEdge(a, b)) continue;
+        for (let i = 0; i < components.length; i++) {
+          if (components[i] === right) components[i] = left;
+        }
+        if (edges.length === points.length - 1) break;
+      }
+      if (edges.length !== points.length - 1) return null;
+    } else {
+      for (let a = count; a < points.length; a++) {
+        const candidates = points.map((_, i) => i).filter((b) => b < a)
+          .sort((b, c) => g.distance(points[a], points[b]) - g.distance(points[a], points[c]));
+        if (!candidates.some((b) => tryEdge(a, b))) return null;
+      }
+    }
     for (const [a, b] of shuffle(choices, random)) {
       if (edges.length >= Math.ceil(points.length * settings.edgeFactor)) break;
       tryEdge(a, b);
@@ -188,12 +205,34 @@
     return controls;
   }
 
-  function buildWitness(count, rank, mode, random, sharedOrbits) {
+  function addInterior(points, count, random) {
+    const nodes = [];
+    for (let i = 0; i < count; i++) {
+      let best;
+      let clearance = 0;
+      for (let sample = 0; sample < 20; sample++) {
+        const point = [155 + random() * 590, 98 + random() * 344];
+        const distance = Math.min(...points.map((other) => g.distance(point, other)));
+        if (distance <= clearance) continue;
+        clearance = distance;
+        best = point;
+      }
+      if (clearance < 35) return null;
+      nodes.push(points.length);
+      points.push(best);
+    }
+    return nodes;
+  }
+
+  function buildWitness(count, rank, mode, random, sharedOrbits, distributed) {
     const settings = difficulty[rank];
     const recipe = recipeFor(count, rank, mode, random, sharedOrbits);
     const trackNodes = recipe.rail.reduce((sum, size) => sum + size, 0);
     const diskNodes = sharedOrbits ? recipe.rotor.reduce((sum, size) => sum + size, 0) : 0;
-    const inside = trackNodes || diskNodes ? 0 : count >= 10 && rank === 'hard' ? 2 : count >= 6 && rank !== 'easy' ? 1 : 0;
+    const mechanismNodes = trackNodes + diskNodes;
+    const looseNodes = count - mechanismNodes;
+    const inside = distributed ? g.clamp(Math.round(count * .6) - mechanismNodes, 0, Math.max(0, looseNodes - (count < 6 ? 2 : 3))) :
+      mechanismNodes ? 0 : count >= 10 && rank === 'hard' ? 2 : count >= 6 && rank !== 'easy' ? 1 : 0;
     const ring = count - trackNodes - diskNodes - inside;
     const phase = random() * 2 * Math.PI;
     // A wider ellipse and less jitter keep the perimeter nodes apart on large boards.
@@ -207,7 +246,8 @@
       const angle = phase + (i + random() * spread) * 2 * Math.PI / ring;
       return [450 + (radiusX + random() * jitterX) * Math.cos(angle), 270 + (radiusY + random() * jitterY) * Math.sin(angle)];
     });
-    for (let i = 0; i < inside; i++) {
+    const legacyInside = distributed ? 0 : inside;
+    for (let i = 0; i < legacyInside; i++) {
       points.push([450 + (i - (inside - 1) / 2) * 205 + (random() - .5) * 48, 270 + (random() - .5) * 106]);
     }
     const controlled = addTracks(points, recipe.rail, random);
@@ -216,9 +256,11 @@
       if (!disks) return null;
       controlled.push(...disks);
     }
-    const graph = fitGraph(points, ring, settings, random);
+    const innerNodes = distributed ? addInterior(points, inside, random) : [];
+    if (!innerNodes) return null;
+    const graph = fitGraph(points, ring, settings, random, distributed);
     if (!graph) return null;
-    const available = shuffle(Array.from({ length: ring + inside }, (_, i) => i), random);
+    const available = shuffle([...Array.from({ length: ring + legacyInside }, (_, i) => i), ...innerNodes], random);
     const take = () => available.pop();
     const centers = [];
     for (const size of sharedOrbits ? [] : recipe.rotor) {
@@ -249,12 +291,12 @@
     return g.createLevel({ ...graph, points, controls: [...available.map((node) => g.free(node, points[node])), ...controlled] });
   }
 
-  function generate(seed, rank, count, mode, sharedOrbits = true) {
+  function generate(seed, rank, count, mode, generatorRevision = revision) {
     const random = randomFrom(seed);
     const settings = difficulty[rank];
     let best;
     for (let attempt = 0; attempt < 30; attempt++) {
-      const puzzle = buildWitness(count, rank, mode, random, sharedOrbits);
+      const puzzle = buildWitness(count, rank, mode, random, generatorRevision >= 4, generatorRevision >= 5);
       if (!puzzle) continue;
       const indices = puzzle.controls.map((_, i) => i);
       const movable = indices.filter((i) => puzzle.controls[i].kind === 'free');
@@ -274,7 +316,8 @@
         const selected = shuffle(movable, random).slice(0, sampleCount);
         const destinations = selected.map((i) => puzzle.controls[i].target);
         selected.forEach((index, i) => {
-          const arbitrary = [g.margin + random() * (g.width - g.margin * 2), g.margin + random() * (g.height - g.margin * 2)];
+          const arbitrary = generatorRevision >= 5 ? [135 + random() * 630, 90 + random() * 360] :
+            [g.margin + random() * (g.width - g.margin * 2), g.margin + random() * (g.height - g.margin * 2)];
           start[index] = selected.length < 2 || random() < .30 ? arbitrary : destinations[(i + 1) % selected.length];
         });
         special.forEach((i) => {
@@ -507,6 +550,6 @@
     return { puzzle: authored(draft, witness, bestRadius) };
   }
 
-  globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, defaultCount, generate, authored, solveDraft,
+  globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, revision, defaultCount, generate, authored, solveDraft,
     rotorFits, rememberAnswer, scrambleDraft, projectState };
 })();

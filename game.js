@@ -12,11 +12,16 @@
   const mechanism = byId('mechanism');
   const editMechanism = byId('edit-mechanism');
   const storageKey = 'jiexian-v2';
-  const generatorRevision = 4;
+  const generatorRevision = puzzles.revision;
   const boardInset = 24;
   const minZoom = .75;
   const maxZoom = 3.5;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const portrait = matchMedia('(orientation: portrait)');
+  const compactViewport = matchMedia('(max-width: 730px) and (orientation: portrait), (max-height: 510px) and (orientation: landscape)');
+  const timer = byId('timer');
+  const timerHome = timer.parentElement;
+  const gameControls = byId('game-controls');
   const historyDuration = 240;
   const smoothStep = (t) => t * t * (3 - 2 * t);
   const turnKeys = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -102,7 +107,7 @@
   let historyMotion = null;
   let suggestion = null;
   let hover = -1;
-  let size = { w: 0, h: 0, dpr: 1 };
+  let size = { w: 0, h: 0, dpr: 1, turned: false };
   let frame = 0;
   let expandedView = false;
 
@@ -155,6 +160,7 @@
     touches.clear();
     board.classList.remove('dragging');
     board.style.cursor = '';
+    setFullscreenMenu(false);
     level = next;
     const usable = Array.isArray(run?.state) && run.state.length === level.controls.length && run.state.every((part, i) =>
       Array.isArray(part) && part.length === level.controls[i].start.length && part.every(Number.isFinite));
@@ -180,7 +186,7 @@
     byId('edit-quiet').hidden = !editing;
     byId('editing-return').hidden = editing;
     byId('session-panel').hidden = editing;
-    byId('timer').hidden = editing;
+    timer.hidden = editing;
     byId('editor-status').textContent = '';
     setStatus('');
     updatePanel();
@@ -232,6 +238,12 @@
     const solveLabel = animation && !animation.singleStep ?
       (animation.paused ? '继续求解' : '暂停求解') : '一键求解';
     if (byId('solve-label').textContent !== solveLabel) byId('solve-label').textContent = solveLabel;
+    const compactSolve = byId('compact-solve');
+    compactSolve.hidden = !animation || animation.singleStep;
+    if (!compactSolve.hidden && compactSolve.getAttribute('aria-label') !== solveLabel) {
+      compactSolve.setAttribute('aria-label', solveLabel);
+      compactSolve.textContent = animation.paused ? '继续' : '暂停';
+    }
     byId('hint').disabled = busy;
     byId('undo').disabled = !history.length || busy;
     byId('redo').disabled = !future.length || busy;
@@ -581,7 +593,7 @@
   }
 
   function randomize(config, run) {
-    const stage = puzzles.generate(config.seed, config.rank, config.count, config.mechanism, config.revision >= generatorRevision);
+    const stage = puzzles.generate(config.seed, config.rank, config.count, config.mechanism, config.revision);
     if (!stage) return false;
     randomConfig = config;
     tab = 'random';
@@ -617,6 +629,7 @@
       return;
     }
     if (timerMode === 'idle') startClock();
+    setFullscreenMenu(false);
     const steps = singleStep ? plan.slice(0, 1) : plan;
     historyMotion = null;
     const before = currentSnapshot();
@@ -669,14 +682,18 @@
   }
 
   function transform() {
-    const fit = Math.min(Math.max(1, size.w - 12) / (g.width - 2 * boardInset),
-      Math.max(1, size.h - 12) / (g.height - 2 * boardInset));
+    const width = size.turned ? g.height : g.width;
+    const height = size.turned ? g.width : g.height;
+    const fit = Math.min(Math.max(1, size.w - 12) / (width - 2 * boardInset),
+      Math.max(1, size.h - 12) / (height - 2 * boardInset));
     return { k: fit * view.zoom, x: size.w / 2 + view.x, y: size.h / 2 + view.y };
   }
 
   function toWorld([px, py]) {
     const { k, x, y } = transform();
-    return [(px - x) / k + g.width / 2, (py - y) / k + g.height / 2];
+    const dx = (px - x) / k;
+    const dy = (py - y) / k;
+    return [g.width / 2 + (size.turned ? dy : dx), g.height / 2 + (size.turned ? -dx : dy)];
   }
 
   function local(event) {
@@ -706,12 +723,28 @@
     render();
   }
 
+  function setFullscreenMenu(open) {
+    document.documentElement.classList.toggle('fullscreen-menu-open', open);
+    const button = byId('fullscreen-menu');
+    button.setAttribute('aria-expanded', String(open));
+    button.textContent = open ? '收起操作' : '操作';
+    if (!open && gameControls.contains(document.activeElement) && compactViewport.matches &&
+        document.documentElement.classList.contains('compact-fullscreen')) button.focus({ preventScroll: true });
+  }
+
   function syncFullscreen() {
     const active = Boolean(document.fullscreenElement) || expandedView;
-    document.documentElement.classList.toggle('game-fullscreen', active);
+    const compact = active && compactViewport.matches;
+    const root = document.documentElement;
+    root.classList.toggle('game-fullscreen', active);
+    root.classList.toggle('compact-fullscreen', compact);
+    if (!compact) setFullscreenMenu(false);
+    const timerContainer = compact ? gameControls : timerHome;
+    if (timer.parentElement !== timerContainer) timerContainer.append(timer);
     const button = byId('fullscreen');
     button.querySelector('span').textContent = active ? '退出全屏' : '全屏';
     button.querySelector('use').setAttribute('href', active ? '#i-exit-fullscreen' : '#i-fullscreen');
+    resize();
   }
 
   async function toggleFullscreen() {
@@ -892,8 +925,9 @@
       render();
       return;
     }
-    const direction = turnKeys[event.key];
-    if (!direction || selection === -1) return;
+    const screenDirection = turnKeys[event.key];
+    if (!screenDirection || selection === -1) return;
+    const direction = size.turned ? [screenDirection[1], -screenDirection[0]] : screenDirection;
     event.preventDefault();
     const index = level.ownership[selection];
     const control = level.controls[index];
@@ -942,6 +976,7 @@
     ctx.clearRect(0, 0, size.w, size.h);
     ctx.translate(x, y);
     ctx.scale(k, k);
+    if (size.turned) ctx.rotate(Math.PI / 2);
     ctx.translate(-g.width / 2, -g.height / 2);
     ctx.lineWidth = 1 / k;
     ctx.strokeStyle = '#e3e3e0';
@@ -963,6 +998,14 @@
       ctx.lineTo(...b);
       ctx.stroke();
     };
+    const uprightLabel = (label, [px, py]) => {
+      if (!size.turned) { ctx.fillText(label, px, py); return; }
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    };
 
     const tracks = new Set();
     shownLevel.controls.forEach((control) => {
@@ -981,7 +1024,7 @@
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#4b4b49';
-        ctx.fillText(control.symbol, ...control.center);
+        uprightLabel(control.symbol, control.center);
       }
       if (control.kind === 'rail' && !tracks.has(control.a)) {
         tracks.add(control.a);
@@ -1084,7 +1127,7 @@
         ctx.font = `700 ${Math.max(label.length > 1 ? 12 : 15, 9 / k)}px "Segoe UI", sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(label, px, py);
+        uprightLabel(label, point);
       }
     });
     ctx.globalAlpha = 1;
@@ -1098,11 +1141,16 @@
     const w = board.clientWidth;
     const h = board.clientHeight;
     const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-    if (w === size.w && h === size.h && dpr === size.dpr) return;
-    size = { w, h, dpr };
+    const turned = document.documentElement.classList.contains('compact-fullscreen') && portrait.matches;
+    if (w === size.w && h === size.h && dpr === size.dpr && turned === size.turned) return;
+    const center = size.w && size.h ? toWorld([size.w / 2, size.h / 2]) : [g.width / 2, g.height / 2];
+    size = { w, h, dpr, turned };
     board.width = Math.round(w * dpr);
     board.height = Math.round(h * dpr);
-    render();
+    const { k } = transform();
+    const dx = center[0] - g.width / 2;
+    const dy = center[1] - g.height / 2;
+    setView(-k * (turned ? -dy : dx), -k * (turned ? dx : dy));
   }
 
   form.addEventListener('change', () => {
@@ -1178,9 +1226,19 @@
   byId('zoom-out').addEventListener('click', () => zoom(1 / 1.24));
   byId('fit').addEventListener('click', resetView);
   byId('fullscreen').addEventListener('click', toggleFullscreen);
+  byId('fullscreen-menu').addEventListener('click', () => {
+    setFullscreenMenu(!document.documentElement.classList.contains('fullscreen-menu-open'));
+  });
+  byId('compact-solve').addEventListener('click', () => animation?.togglePause());
   document.addEventListener('fullscreenchange', syncFullscreen);
+  compactViewport.addEventListener('change', syncFullscreen);
+  portrait.addEventListener('change', syncFullscreen);
   document.addEventListener('keydown', (event) => {
     if (byId('rules-dialog').open) return;
+    if (event.key === 'Escape' && document.documentElement.classList.contains('fullscreen-menu-open')) {
+      setFullscreenMenu(false);
+      return;
+    }
     if (event.key === 'Escape' && expandedView) {
       expandedView = false;
       syncFullscreen();
@@ -1203,7 +1261,7 @@
   const config = saved.random?.config;
   const valid = config && Object.hasOwn(puzzles.difficulty, config.rank) && Object.hasOwn(puzzles.modes, config.mechanism) &&
     Number.isInteger(config.count) && config.count >= puzzles.minNodes && config.count <= puzzles.maxNodes && Number.isInteger(config.seed);
-  if (valid && ![3, generatorRevision].includes(config.revision)) {
+  if (valid && ![3, 4, generatorRevision].includes(config.revision)) {
     const count = config.auto ? puzzles.defaultCount(config.rank, config.mechanism) : config.count;
     createRandom(config.rank, count, config.mechanism, config.auto);
   } else if (valid) randomize(config, saved.random);

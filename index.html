@@ -7,11 +7,11 @@
   <meta name="description" content="解线是一款拖动节点、理顺连线的空间益智游戏。按难度随机出题，也可以自己摆点连线并求解。">
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
-  <link rel="stylesheet" href="./style.css?v=10">
+  <link rel="stylesheet" href="./style.css?v=11">
   <script src="./engine.js?v=6" defer></script>
   <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=9" defer></script>
-  <script src="./game.js?v=12" defer></script>
+  <script src="./puzzles.js?v=10" defer></script>
+  <script src="./game.js?v=13" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -72,7 +72,11 @@
             <button id="zoom-in" title="放大" aria-label="放大"><svg><use href="#i-in"/></svg></button>
             <button id="fit" title="回正视图（1）" aria-label="回正视图"><svg><use href="#i-fit"/></svg></button>
           </div>
-          <button id="fullscreen" class="fullscreen-toggle"><svg aria-hidden="true"><use href="#i-fullscreen"/></svg><span>全屏</span></button>
+          <div class="board-actions">
+            <button id="compact-solve" class="fullscreen-toggle compact-control" hidden></button>
+            <button id="fullscreen-menu" class="fullscreen-toggle compact-control" aria-expanded="false" aria-controls="game-controls">操作</button>
+            <button id="fullscreen" class="fullscreen-toggle"><svg aria-hidden="true"><use href="#i-fullscreen"/></svg><span>全屏</span></button>
+          </div>
         </div>
         <div class="board-view">
           <canvas id="board" tabindex="0" aria-label="解线棋盘" aria-describedby="board-help"></canvas>
@@ -83,7 +87,7 @@
         </div>
       </section>
 
-      <aside class="sidebar" aria-label="游戏控制">
+      <aside class="sidebar" id="game-controls" aria-label="游戏控制">
         <form class="panel generator" id="generator">
           <div class="panel-heading"><h2>出题设置</h2></div>
           <fieldset class="rank"><legend>难度</legend>
