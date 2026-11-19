@@ -569,7 +569,7 @@
     load(result.puzzle);
     syncMechanism();
     if (result.reason) setStatus(result.reason);
-    if (solveNow && !won) animate(false);
+    if (solveNow) animate(false);
   }
 
   function randomize(config, run) {
@@ -1043,6 +1043,12 @@
     if (timerMode === 'running') stopClock('paused');
     else startClock();
     updateControls();
+    updateClock();
+    save();
+  });
+  byId('timer-reset').addEventListener('click', () => {
+    elapsed = 0;
+    clockStart = timerMode === 'running' ? performance.now() : null;
     updateClock();
     save();
   });

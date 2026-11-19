@@ -49,7 +49,8 @@ h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; l
 .timer span, .timer strong { display: block; }
 .timer span { color: var(--muted); font-size: 11px; }
 .timer strong { margin-top: 2px; font: 650 24px/1 "Cascadia Mono", Consolas, monospace; }
-.timer button { min-width: 56px; min-height: 36px; margin-left: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); font-size: 12px; }
+.timer-actions { display: flex; gap: 6px; }
+.timer button { min-width: 50px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); font-size: 12px; }
 .timer button:hover { background: #ebebe9; }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 22px; align-items: start; }
@@ -149,12 +150,14 @@ dialog p, dialog dd { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .rules-button span { position: absolute; clip-path: inset(50%); }
   main { padding-top: 20px; }
   .intro { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 15px; align-items: end; }
+  .intro h1 { font-size: clamp(26px, 8vw, 36px); }
   .intro p { font-size: 12px; }
   .timer { gap: 6px; padding: 6px 7px; }
   .timer > svg { display: none; }
   .timer span { font-size: 10px; }
   .timer strong { font-size: 17px; }
-  .timer button { min-width: 40px; min-height: 35px; margin-left: 0; }
+  .timer-actions { gap: 4px; }
+  .timer button { min-width: 40px; min-height: 35px; }
   .layout { grid-template-columns: minmax(0, 1fr); gap: 13px; }
   .board-view { height: clamp(286px, 67vw, 415px); }
   .board-toolbar { padding-inline: 8px; }
@@ -163,6 +166,12 @@ dialog p, dialog dd { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .sidebar { gap: 13px; }
   .stats { margin: 12px 0; }
   .actions { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 370px) {
+  .top-inner { grid-template-columns: auto 1fr auto; }
+  .modes { justify-self: center; }
+  .modes button svg { display: none; }
 }
 
 .game-fullscreen { overflow: hidden; background: #fff; }

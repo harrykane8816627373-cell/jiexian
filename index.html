@@ -7,11 +7,11 @@
   <meta name="description" content="解线是一款拖动节点、理顺连线的空间益智游戏。按难度随机出题，也可以自己摆点连线并求解。">
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
-  <link rel="stylesheet" href="./style.css?v=6">
-  <script src="./engine.js?v=4" defer></script>
+  <link rel="stylesheet" href="./style.css?v=7">
+  <script src="./engine.js?v=5" defer></script>
   <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=6" defer></script>
-  <script src="./game.js?v=8" defer></script>
+  <script src="./puzzles.js?v=7" defer></script>
+  <script src="./game.js?v=9" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -57,7 +57,10 @@
       <div class="timer" id="timer">
         <svg aria-hidden="true"><use href="#i-clock"/></svg>
         <div><span>本局计时</span><strong id="clock" aria-label="本局用时">00:00</strong></div>
-        <button id="timer-toggle">开始</button>
+        <div class="timer-actions">
+          <button id="timer-toggle">开始</button>
+          <button id="timer-reset" aria-label="计时清零">清零</button>
+        </div>
       </div>
     </section>
 
@@ -167,7 +170,7 @@
     </dl>
     <p>拖动空白处移动视图，滚轮或 ＋ / − 缩放，按 1 回正。点棋盘右上角的全屏按钮可以扩大视野。键盘可用 Q / E 选择节点、方向键移动。</p>
     <p>「提示一步」会替你走一步。「一键求解」会演示整套动作。两种操作都可以撤销。</p>
-    <p>计时在首次移动时自动开始，也可以手动开始或暂停。解开后自动停表。暂停或解开后，仍然可以操作棋盘。</p>
+    <p>计时在首次移动时自动开始，也可以手动开始、暂停或清零。清零只重置用时。解开后自动停表，仍然可以操作棋盘。</p>
     <p>自定义题的「机制」工具可建立多组联动、星盘和共享滑轨。先摆出无冲突布局，再点「打乱题目」，就能得到带已知解的题目。</p>
   </dialog>
 </body>

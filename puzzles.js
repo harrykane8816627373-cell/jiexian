@@ -444,19 +444,23 @@
         reason: '暂时没找到符合所有机制的解。可以继续试玩，或回到编辑器摆成无冲突的布局，再点「打乱」生成有解题。',
       };
     }
-    let best = 0;
+    let bestRadius = 0;
+    let bestPenalty = Infinity;
     let witness;
     for (const drawing of drawings) {
       for (const angle of [0, Math.PI / 6, Math.PI / 3, Math.PI / 2, -Math.PI / 6]) {
         const points = fitDrawing(drawing, angle);
-        const space = clearance(points, draft.edges);
-        if (!(space > best) || g.evaluate({ ...initial, radius: Math.min(g.radius, space * .85) }, points).count) continue;
-        best = space;
+        const radius = Math.min(g.radius, clearance(points, draft.edges) * .85);
+        if (!radius || radius < bestRadius || g.evaluate({ ...initial, radius }, points).count) continue;
+        const penalty = g.layoutPenalty(initial, points);
+        if (radius === bestRadius && penalty >= bestPenalty) continue;
+        bestRadius = radius;
+        bestPenalty = penalty;
         witness = points;
       }
     }
     if (!witness) return { reason: '找不到能在棋盘内展开的布局。试试减少连线或节点。' };
-    return { puzzle: authored(draft, witness, Math.min(g.radius, best * .85)) };
+    return { puzzle: authored(draft, witness, bestRadius) };
   }
 
   globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, defaultCount, generate, authored, solveDraft,

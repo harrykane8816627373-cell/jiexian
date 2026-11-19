@@ -179,36 +179,112 @@
     return distance(a, b);
   }
 
-  function solve(level, state) {
-    const score = (candidate) => evaluate(level, positions(level, candidate)).count;
-    const initialScore = score(state);
-    if (!initialScore) return [];
-    const pending = level.controls.map((_, i) => i);
-    // Start from a valid embedding. Keep as much of the player's layout as geometry allows.
-    const goal = copy(level.witness);
-    const nearest = [...pending].sort((a, b) =>
-      moveDistance(level.controls[a], goal[a], state[a]) - moveDistance(level.controls[b], goal[b], state[b]));
-    for (let pass = 0; pass < 2; pass++) {
-      for (const i of nearest) {
-        const previous = goal[i];
-        for (const fraction of [1, 0.75, 0.5, 0.25, 0.125]) {
-          goal[i] = mixValue(level.controls[i], previous, state[i], fraction);
-          if (score(goal) === 0) break;
-          goal[i] = previous;
+  const readableNodeGap = 60;
+  const readableLineGap = 40;
+  const readableHalfAngle = Math.sin(13 * Math.PI / 180);
+  const offsetDirections = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+  function layoutPenalty(level, points) {
+    let penalty = 0;
+    let largest = 0;
+    const addGap = (ratio) => {
+      if (ratio >= 1) return;
+      const cost = (1 - ratio) ** 2;
+      penalty += cost;
+      largest = Math.max(largest, cost);
+    };
+    const directions = points.map(() => []);
+    points.forEach((point, i) => {
+      for (let j = 0; j < i; j++) addGap(distance(point, points[j]) / readableNodeGap);
+    });
+    level.edges.forEach(([i, j]) => {
+      const a = points[i];
+      const b = points[j];
+      points.forEach((point, k) => {
+        if (k !== i && k !== j) addGap(distanceToSegment(point, a, b) / readableLineGap);
+      });
+      const length = distance(a, b);
+      if (!length) return;
+      const dx = (b[0] - a[0]) / length;
+      const dy = (b[1] - a[1]) / length;
+      directions[i].push([dx, dy]);
+      directions[j].push([-dx, -dy]);
+    });
+    for (const rays of directions) {
+      rays.forEach(([x, y], i) => {
+        for (let j = 0; j < i; j++) {
+          const [u, v] = rays[j];
+          const halfSine = Math.min(1, Math.hypot(x - u, y - v) / 2);
+          addGap(halfSine / readableHalfAngle);
         }
+      });
+    }
+    return penalty + 3 * largest;
+  }
+
+  function nearbyValues(control, value, step) {
+    if (control.kind === 'rotor' || control.kind === 'rail') {
+      const scale = control.kind === 'rotor' ? 94 : distance(control.a, control.b);
+      return [-1, 1].map((sign) => normalize(control, [value[0] + sign * step / scale]));
+    }
+    return offsetDirections.map(([x, y]) => normalize(control, [value[0] + x * step, value[1] + y * step]));
+  }
+
+  function spreadLayout(level, start, startPenalty) {
+    const goal = copy(start);
+    let penalty = startPenalty;
+    for (const step of [64, 32, 16, 8]) {
+      for (const [i, control] of level.controls.entries()) {
+        if (penalty <= eps) return goal;
+        let best = goal[i];
+        for (const value of nearbyValues(control, best, step)) {
+          goal[i] = value;
+          const points = positions(level, goal);
+          const cost = layoutPenalty(level, points);
+          if (cost >= penalty - eps || evaluate(level, points).count) continue;
+          best = value;
+          penalty = cost;
+        }
+        goal[i] = best;
       }
     }
+    return goal;
+  }
+
+  function keepPlayerPositions(level, state, goal) {
+    const maximumPenalty = layoutPenalty(level, positions(level, goal)) + eps;
+    for (const [i, control] of level.controls.entries()) {
+      const from = goal[i];
+      if (moveDistance(control, from, state[i]) < eps) continue;
+      for (const fraction of [1, .5, .25]) {
+        goal[i] = mixValue(control, from, state[i], fraction);
+        const points = positions(level, goal);
+        if (layoutPenalty(level, points) <= maximumPenalty && !evaluate(level, points).count) break;
+        goal[i] = from;
+      }
+    }
+  }
+
+  function solve(level, state) {
+    if (!level.witness) return [];
+    const initial = positions(level, state);
+    const initialPenalty = evaluate(level, initial).count ? Infinity : layoutPenalty(level, initial);
+    if (initialPenalty <= eps) return [];
+    const witnessPenalty = layoutPenalty(level, positions(level, level.witness));
+    const start = initialPenalty <= witnessPenalty ? state : level.witness;
+    const goal = spreadLayout(level, start, Math.min(initialPenalty, witnessPenalty));
+    if (initialPenalty === Infinity) keepPlayerPositions(level, state, goal);
+    const pending = level.controls.map((_, i) => i);
     const current = copy(state);
     const moves = [];
-    let conflicts = initialScore;
-    while (conflicts && pending.length) {
+    while (pending.length) {
       let best;
       for (const i of pending) {
         const length = moveDistance(level.controls[i], current[i], goal[i]);
         if (length < eps) continue;
         const trial = [...current];
         trial[i] = goal[i];
-        const remaining = score(trial);
+        const remaining = evaluate(level, positions(level, trial)).count;
         if (!best || remaining < best.remaining || (remaining === best.remaining && length < best.length)) {
           best = { index: i, value: goal[i], length, remaining };
         }
@@ -217,12 +293,11 @@
       moves.push(best);
       current[best.index] = best.value;
       pending.splice(pending.indexOf(best.index), 1);
-      conflicts = best.remaining;
     }
     return moves;
   }
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
     positions, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
-    trackPosition, interpolate };
+    trackPosition, interpolate, layoutPenalty };
 })();
