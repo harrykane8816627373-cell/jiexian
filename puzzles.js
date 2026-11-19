@@ -525,6 +525,12 @@
     return drawings ? searchConstrained(puzzle, drawings, current) : null;
   }
 
+  function searchObstacles(puzzle, current = puzzle.initial) {
+    if (!puzzle.obstacles.length || puzzle.controls.length !== puzzle.points.length ||
+      puzzle.controls.some(({ kind }) => kind !== 'free')) return null;
+    return globalThis.JiexianObstacleDrawing.solve(puzzle, current);
+  }
+
   function solveDraft(draft) {
     const initial = authored(draft);
     if (!g.evaluate(initial, g.positions(initial, initial.initial)).count) return { puzzle: initial };
@@ -554,6 +560,6 @@
     return { puzzle: authored(draft, witness, bestRadius) };
   }
 
-  globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, revision, defaultCount, generate, authored, solveDraft, searchDraft,
+  globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, revision, defaultCount, generate, authored, solveDraft, searchDraft, searchObstacles,
     rotorFits, rememberAnswer, scrambleDraft, projectState };
 })();

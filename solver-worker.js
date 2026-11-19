@@ -1,6 +1,6 @@
 'use strict';
 
-importScripts('./engine.js?v=7', './planarity.js?v=3', './puzzles.js?v=11', './solver-tracks.js?v=1',
+importScripts('./engine.js?v=7', './planarity.js?v=3', './solver-obstacles.js?v=1', './puzzles.js?v=12', './solver-tracks.js?v=1',
   './solver-regions.js?v=1', './solver-geometry.js?v=3', './exact-solver.js?v=3');
 
 async function loadZ3() {
@@ -22,13 +22,19 @@ async function loadZ3() {
 
 self.onmessage = async ({ data: { puzzle, current } }) => {
   try {
+    const puzzles = globalThis.JiexianPuzzles;
+    const obstacleLayout = puzzles.searchObstacles(puzzle, current);
+    if (obstacleLayout) {
+      self.postMessage({ status: 'solved', state: obstacleLayout });
+      return;
+    }
     const { prepareExact, solveExact } = globalThis.JiexianExact;
     const problem = prepareExact(puzzle);
     if (problem.status === 'solved' || problem.status === 'unsat') {
       self.postMessage(problem);
       return;
     }
-    const state = globalThis.JiexianPuzzles.searchDraft(puzzle, current);
+    const state = puzzles.searchDraft(puzzle, current);
     if (state) {
       self.postMessage({ status: 'solved', state });
       return;

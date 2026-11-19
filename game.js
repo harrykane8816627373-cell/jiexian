@@ -617,13 +617,13 @@
       // File URLs cannot load a same-origin worker or fetch its WebAssembly.
       setTimeout(() => {
         if (search !== job) return;
-        const answer = puzzles.searchDraft(puzzle, current);
+        const answer = puzzles.searchObstacles(puzzle, current) ?? puzzles.searchDraft(puzzle, current);
         receive(answer ? { status: 'solved', state: answer } : { status: 'local' });
       }, 0);
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=4');
+      job.worker = new Worker('./solver-worker.js?v=5');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current });

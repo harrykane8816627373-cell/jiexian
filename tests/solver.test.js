@@ -5,6 +5,7 @@ const { test } = require('node:test');
 const { gunzipSync } = require('node:zlib');
 require('../engine.js');
 require('../planarity.js');
+require('../solver-obstacles.js');
 require('../puzzles.js');
 require('../solver-tracks.js');
 require('../solver-regions.js');
@@ -288,6 +289,60 @@ test('remaining rotor chart boxes are passed as exact cuts to the full mixed sol
   assert.ok(cut.boxes.length <= 12);
   assert.ok(cut.boxes.some((box) => box.some(([lo]) => lo < 0n)));
   checkSolution(level, exact(level));
+});
+
+function obstacleWall(columns, rows) {
+  const points = [], edges = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < columns; x++) {
+      const i = points.length;
+      points.push([390 + (i % 6) * 43, 86 + Math.floor(i / 6) * 74]);
+      if (x) edges.push([i - 1, i]);
+      if (y) edges.push([i - columns, i]);
+      if (x && y) edges.push([i - columns - 1, i]);
+    }
+  }
+  const obstacles = [100, 214, 326, 438].map((y) => ({ center: [169 + (columns - 1) * 54, y], r: 84 }));
+  return puzzles.authored({ points, edges, obstacles });
+}
+
+test('obstacle-only planar grid layouts fit on one side of a wall of disks at full game clearance', () => {
+  for (const columns of [3, 5]) {
+    const level = obstacleWall(columns, 4);
+    assert.ok(g.evaluate(level, g.positions(level, level.initial)).count > 0);
+    const state = puzzles.searchObstacles(level);
+    checkSolution(level, { status: 'solved', state });
+    const xs = g.positions(level, state).map(([x]) => x);
+    const [wall] = level.obstacles[0].center;
+    assert.ok(Math.max(...xs) < wall || Math.min(...xs) > wall);
+    assert.equal(level.radius, g.radius);
+  }
+});
+
+test('capsule slices translate an existing cycle without shrinking it or evicting the disk from its interior', () => {
+  const points = [[158, 60], [858, 60], [858, 420], [158, 420]];
+  const obstacles = [{ center: [186, 245], r: 35 }];
+  const draft = { points, edges: [[0, 1], [1, 2], [2, 3], [3, 0]], obstacles };
+  const level = puzzles.authored(draft);
+  assert.equal(g.evaluate(level, points).count, 1);
+  const state = puzzles.searchObstacles(level);
+  checkSolution(level, { status: 'solved', state });
+  const result = g.positions(level, state);
+  const shift = result[0].map((coordinate, i) => coordinate - points[0][i]);
+  assert.ok(result.every((p, i) => p.every((x, axis) => Math.abs(x - points[i][axis] - shift[axis]) < 1e-9)));
+  const [x, y] = obstacles[0].center;
+  assert.ok(result[0][0] < x && x < result[2][0] && result[0][1] < y && y < result[2][1]);
+  assert.equal(puzzles.searchObstacles(puzzles.authored({ ...draft, fixed: [0] })), null);
+});
+
+test('translation slices preserve a singleton gap between two tangent capsule boundaries', () => {
+  const points = [[320, 42], [320, 498]];
+  const obstacles = [110, 280, 350, 550, 700, 790].map((x) => ({ center: [x, 270], r: 96 }));
+  const level = puzzles.authored({ points, edges: [[0, 1]], obstacles });
+  assert.ok(g.evaluate(level, points).count);
+  const state = puzzles.searchObstacles(level);
+  checkSolution(level, { status: 'solved', state });
+  assert.deepEqual(g.positions(level, state), [[450, 42], [450, 498]]);
 });
 
 test('fixed crossings, node-to-edge collisions and segment-to-obstacle collisions are unsatisfiable', () => {
