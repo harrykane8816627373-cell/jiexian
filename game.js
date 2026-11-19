@@ -104,6 +104,7 @@
   let selection = -1;
   let view = { x: 0, y: 0, zoom: 1 };
   let animation = null;
+  let search = null;
   let historyMotion = null;
   let suggestion = null;
   let hover = -1;
@@ -153,6 +154,7 @@
   function currentSnapshot() { return { state: g.copy(state), moves }; }
 
   function load(next, run) {
+    cancelSearch();
     animation = null;
     historyMotion = null;
     suggestion = null;
@@ -235,16 +237,16 @@
     const dragging = moving?.kind === 'node';
     const busy = !!animation || dragging;
     byId('solve').disabled = dragging || animation?.singleStep === true;
-    const solveLabel = animation && !animation.singleStep ?
+    const solveLabel = search ? '取消搜索' : animation && !animation.singleStep ?
       (animation.paused ? '继续求解' : '暂停求解') : '一键求解';
     if (byId('solve-label').textContent !== solveLabel) byId('solve-label').textContent = solveLabel;
     const compactSolve = byId('compact-solve');
-    compactSolve.hidden = !animation || animation.singleStep;
+    compactSolve.hidden = !(search && !editing) && (!animation || animation.singleStep);
     if (!compactSolve.hidden && compactSolve.getAttribute('aria-label') !== solveLabel) {
       compactSolve.setAttribute('aria-label', solveLabel);
-      compactSolve.textContent = animation.paused ? '继续' : '暂停';
+      compactSolve.textContent = search ? '取消搜索' : animation.paused ? '继续' : '暂停';
     }
-    byId('hint').disabled = busy;
+    byId('hint').disabled = busy || !!search;
     byId('undo').disabled = !history.length || busy;
     byId('redo').disabled = !future.length || busy;
     byId('restart').disabled = busy || (!moves && timerMode === 'idle');
@@ -257,6 +259,8 @@
     byId('draft-clear').disabled = !draft.points.length || dragging;
     byId('scramble-draft').disabled = dragging || !draft.edges.length;
     byId('solve-draft').disabled = dragging;
+    const draftSolveLabel = search ? '取消搜索' : '求解这题';
+    if (byId('solve-draft-label').textContent !== draftSolveLabel) byId('solve-draft-label').textContent = draftSolveLabel;
     byId('play-draft').disabled = dragging;
     byId('edit-current').disabled = busy;
   }
@@ -329,6 +333,7 @@
   }
 
   function replaceDraft(next, { remember = true, changedNode } = {}) {
+    cancelSearch();
     if (remember) {
       draftHistory.push({ draft, changedNode });
       draftFuture.length = 0;
@@ -575,21 +580,76 @@
     }
   }
 
+  function cancelSearch(message) {
+    if (!search) return;
+    search.worker?.terminate();
+    if (message !== undefined) search.report(message);
+    search = null;
+  }
+
+  function requestWitness(puzzle, current, report, onSolved) {
+    const job = { report };
+    search = job;
+    report('正在搜索符合所有机制的布局…');
+    updateControls();
+    function receive({ status, state: answer }) {
+      if (search !== job) return;
+      if (status === 'exact') {
+        report('正在进行全局判定，可以随时取消。');
+        return;
+      }
+      cancelSearch();
+      updateControls();
+      if (status === 'solved' && !g.evaluate(puzzle, g.positions(puzzle, answer)).count) {
+        puzzle.witness = answer;
+        report('');
+        onSolved();
+        return;
+      }
+      const messages = {
+        unsat: '已证明无解。当前机制和间距要求无法同时满足。',
+        precision: '数学判定为有解，当前解转换成游戏坐标后未通过冲突检查。',
+        local: '快速搜索未找到解。通过 HTTP 打开页面即可运行全局判定。',
+      };
+      report(messages[status] ?? '全局判定未完成，当前题目是否有解尚未确定。');
+    }
+    if (location.protocol === 'file:') {
+      // File URLs cannot load a same-origin worker or fetch its WebAssembly.
+      setTimeout(() => {
+        if (search !== job) return;
+        const answer = puzzles.searchDraft(puzzle, current);
+        receive(answer ? { status: 'solved', state: answer } : { status: 'local' });
+      }, 0);
+      return;
+    }
+    try {
+      job.worker = new Worker('./solver-worker.js?v=1');
+      job.worker.onmessage = ({ data }) => receive(data);
+      job.worker.onerror = () => receive({ status: 'unknown' });
+      job.worker.postMessage({ puzzle, current });
+    } catch {
+      receive({ status: 'unknown' });
+    }
+  }
+
   function startDraft(solveNow) {
     if (!draft.edges.length) {
       byId('editor-status').textContent = '请先放置节点并添加至少一条连线。';
       return;
     }
     const result = puzzles.solveDraft(draft);
-    if (!result.puzzle || (solveNow && !result.puzzle.witness)) {
-      byId('editor-status').textContent = result.reason;
+    const report = (message) => { byId('editor-status').textContent = message; };
+    if (!result.puzzle) {
+      report(result.reason);
       return;
     }
-    editing = false;
-    load(result.puzzle);
-    syncMechanism();
-    if (result.reason) setStatus(result.reason);
-    if (solveNow) animate(false);
+    const play = () => {
+      editing = false;
+      load(result.puzzle);
+      if (solveNow) animate(false);
+    };
+    if (solveNow && !result.puzzle.witness) requestWitness(result.puzzle, result.puzzle.initial, report, play);
+    else play();
   }
 
   function randomize(config, run) {
@@ -620,7 +680,7 @@
 
   function animate(singleStep) {
     if (!level.witness && !won) {
-      setStatus('暂时没找到符合所有机制的解。返回编辑，摆出无冲突布局后再打乱即可生成有解题。');
+      requestWitness(level, g.copy(state), setStatus, () => animate(singleStep));
       return;
     }
     const plan = suggestion ?? g.solve(level, state);
@@ -783,6 +843,7 @@
   }
 
   function beginPointer(action) {
+    if (action.kind === 'node') cancelSearch('');
     moving = action;
     hover = -1;
     selection = -1;
@@ -929,6 +990,10 @@
     if (!screenDirection || selection === -1) return;
     const direction = size.turned ? [screenDirection[1], -screenDirection[0]] : screenDirection;
     event.preventDefault();
+    if (search) {
+      cancelSearch('');
+      updateControls();
+    }
     const index = level.ownership[selection];
     const control = level.controls[index];
     const before = currentSnapshot();
@@ -1198,13 +1263,23 @@
   byId('draft-undo').addEventListener('click', () => stepDraftHistory(false));
   byId('draft-redo').addEventListener('click', () => stepDraftHistory(true));
   byId('draft-clear').addEventListener('click', () => replaceDraft(emptyDraft()));
-  byId('solve-draft').addEventListener('click', () => startDraft(true));
+  byId('solve-draft').addEventListener('click', () => {
+    if (search) {
+      cancelSearch('已取消搜索，题目是否有解尚未确定。');
+      updateControls();
+    } else startDraft(true);
+  });
   byId('play-draft').addEventListener('click', () => startDraft(false));
   byId('rules').addEventListener('click', () => byId('rules-dialog').showModal());
-  byId('solve').addEventListener('click', () => {
+  function toggleSolve() {
     if (animation) animation.togglePause();
+    else if (search) {
+      cancelSearch('已取消搜索，题目是否有解尚未确定。');
+      updateControls();
+    }
     else animate(false);
-  });
+  }
+  byId('solve').addEventListener('click', toggleSolve);
   byId('hint').addEventListener('click', () => animate(true));
   byId('undo').addEventListener('click', () => stepHistory(false));
   byId('redo').addEventListener('click', () => stepHistory(true));
@@ -1229,7 +1304,7 @@
   byId('fullscreen-menu').addEventListener('click', () => {
     setFullscreenMenu(!document.documentElement.classList.contains('fullscreen-menu-open'));
   });
-  byId('compact-solve').addEventListener('click', () => animation?.togglePause());
+  byId('compact-solve').addEventListener('click', toggleSolve);
   document.addEventListener('fullscreenchange', syncFullscreen);
   compactViewport.addEventListener('change', syncFullscreen);
   portrait.addEventListener('change', syncFullscreen);

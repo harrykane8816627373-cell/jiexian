@@ -258,4 +258,5 @@
   }
 
   globalThis.JiexianDrawing = drawing;
+  globalThis.JiexianIsPlanar = (count, edges) => rotation(count, edges) !== null;
 })();

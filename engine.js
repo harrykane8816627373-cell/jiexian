@@ -18,6 +18,12 @@
   const mirror = (a, b, start) => ({ kind: 'mirror', members: [a, b], start });
   const rotor = (members, center, angle) => ({ kind: 'rotor', members, center, start: [angle] });
   const rail = (node, a, b, start) => ({ kind: 'rail', members: [node], a, b, start: [start] });
+  const clearances = (level) => {
+    const spacing = level.radius ?? radius;
+    return { nodes: spacing * (33 / 14), nodeEdge: spacing * (19 / 14), spacing, obstacleGap: 4 };
+  };
+  const orientation = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const opposite = (a, b) => (a < 0 && b > 0) || (a > 0 && b < 0);
   const distanceToSegment = (p, a, b) => {
     const dx = b[0] - a[0];
     const dy = b[1] - a[1];
@@ -112,8 +118,7 @@
     const badEdges = new Set();
     const badNodes = new Set();
     const badObstacles = new Set();
-    const spacing = level.radius ?? radius;
-    const nodeSpacing = spacing * (33 / 14);
+    const { nodes: nodeSpacing, nodeEdge, spacing, obstacleGap } = clearances(level);
     let count = 0;
     const markEdge = (i) => {
       badEdges.add(i);
@@ -127,7 +132,7 @@
         count++;
       }
       level.obstacles.forEach(({ center, r }, j) => {
-        if (distance(p, center) >= r + spacing + 4) return;
+        if (distance(p, center) >= r + spacing + obstacleGap) return;
         badNodes.add(i);
         badObstacles.add(j);
         count++;
@@ -138,13 +143,13 @@
       const b = points[j];
       if (distance(a, b) < nodeSpacing) badEdges.add(edge);
       points.forEach((p, k) => {
-        if (k === i || k === j || distanceToSegment(p, a, b) >= spacing * (19 / 14)) return;
+        if (k === i || k === j || distanceToSegment(p, a, b) >= nodeEdge) return;
         badNodes.add(k);
         markEdge(edge);
         count++;
       });
       level.obstacles.forEach(({ center, r }, k) => {
-        if (distanceToSegment(center, a, b) >= r + 4) return;
+        if (distanceToSegment(center, a, b) >= r + obstacleGap) return;
         badObstacles.add(k);
         markEdge(edge);
         count++;
@@ -154,14 +159,8 @@
         const [k, l] = level.edges[other];
         if (i === k || i === l || j === k || j === l) continue;
         const [c, d] = [points[k], points[l]];
-        const [rx, ry] = [b[0] - a[0], b[1] - a[1]];
-        const [sx, sy] = [d[0] - c[0], d[1] - c[1]];
-        const [cx, cy] = [c[0] - a[0], c[1] - a[1]];
-        const determinant = rx * sy - ry * sx;
-        if (Math.abs(determinant) < eps) continue;
-        const t = (cx * sy - cy * sx) / determinant;
-        const u = (cx * ry - cy * rx) / determinant;
-        if (t <= eps || t >= 1 - eps || u <= eps || u >= 1 - eps) continue;
+        if (!opposite(orientation(a, b, c), orientation(a, b, d)) ||
+            !opposite(orientation(c, d, a), orientation(c, d, b))) continue;
         markEdge(edge);
         markEdge(other);
         count++;
@@ -282,8 +281,8 @@
     while (pending.length) {
       let best;
       for (const i of pending) {
+        if (current[i].every((coordinate, axis) => coordinate === goal[i][axis])) continue;
         const length = moveDistance(level.controls[i], current[i], goal[i]);
-        if (length < eps) continue;
         const trial = [...current];
         trial[i] = goal[i];
         const remaining = evaluate(level, positions(level, trial)).count;
@@ -301,5 +300,5 @@
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
     positions, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
-    trackPosition, interpolate, layoutPenalty };
+    trackPosition, interpolate, layoutPenalty, clearances };
 })();

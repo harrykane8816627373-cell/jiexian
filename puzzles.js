@@ -467,12 +467,13 @@
     }));
   }
 
-  function searchConstrained(puzzle, drawings) {
+  function searchConstrained(puzzle, drawings, current) {
     const random = randomFrom(17257833 + puzzle.edges.length * 17);
     const score = (state) => g.evaluate(puzzle, g.positions(puzzle, state));
     const projected = drawings.slice(0, 7).flatMap((drawing) =>
       [0, Math.PI / 2, Math.PI].map((angle) => projectState(puzzle, fitDrawing(drawing, angle))));
-    const seeds = [puzzle.initial, ...projected]
+    const starts = current === puzzle.initial ? [current] : [current, puzzle.initial];
+    const seeds = [...starts, ...projected]
       .map((state) => ({ state, count: score(state).count }))
       .sort((a, b) => a.count - b.count);
     if (!seeds[0].count) return seeds[0].state;
@@ -517,20 +518,23 @@
     return null;
   }
 
+  function searchDraft(puzzle, current = puzzle.initial) {
+    if (!g.evaluate(puzzle, g.positions(puzzle, current)).count) return current;
+    if (!puzzle.controls.length) return null;
+    const drawings = globalThis.JiexianDrawing(puzzle.points.length, puzzle.edges);
+    return drawings ? searchConstrained(puzzle, drawings, current) : null;
+  }
+
   function solveDraft(draft) {
     const initial = authored(draft);
     if (!g.evaluate(initial, g.positions(initial, initial.initial)).count) return { puzzle: initial };
     const known = answerState(initial, draft.answer);
     if (known) return { puzzle: { ...initial, witness: known } };
-    const drawings = globalThis.JiexianDrawing(draft.points.length, draft.edges);
-    if (!drawings) return { reason: '这张图不是平面图，移动节点也无法消除全部交叉。可以删掉一些连线再试。' };
-    if (draft.fixed?.length || draft.groups?.length || draft.obstacles?.length) {
-      const witness = searchConstrained(initial, drawings);
-      return witness ? { puzzle: { ...initial, witness } } : {
-        puzzle: { ...initial, witness: null },
-        reason: '暂时没找到符合所有机制的解。可以继续试玩，或回到编辑器摆成无冲突的布局，再点「打乱」生成有解题。',
-      };
-    }
+    const constrained = draft.fixed?.length || draft.groups?.length || draft.obstacles?.length;
+    const drawings = constrained ? null : globalThis.JiexianDrawing(draft.points.length, draft.edges);
+    const planar = constrained ? globalThis.JiexianIsPlanar(draft.points.length, draft.edges) : !!drawings;
+    if (!planar) return { reason: '这张图不是平面图，移动节点也无法消除全部交叉。可以删掉一些连线再试。' };
+    if (constrained) return { puzzle: { ...initial, witness: null } };
     let bestRadius = 0;
     let bestPenalty = Infinity;
     let witness;
@@ -546,10 +550,10 @@
         witness = points;
       }
     }
-    if (!witness) return { reason: '找不到能在棋盘内展开的布局。试试减少连线或节点。' };
+    if (!witness) return { puzzle: { ...initial, witness: null } };
     return { puzzle: authored(draft, witness, bestRadius) };
   }
 
-  globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, revision, defaultCount, generate, authored, solveDraft,
+  globalThis.JiexianPuzzles = { difficulty, modes, minNodes, maxNodes, revision, defaultCount, generate, authored, solveDraft, searchDraft,
     rotorFits, rememberAnswer, scrambleDraft, projectState };
 })();

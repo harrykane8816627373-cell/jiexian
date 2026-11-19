@@ -8,10 +8,10 @@
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
   <link rel="stylesheet" href="./style.css?v=11">
-  <script src="./engine.js?v=6" defer></script>
-  <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=10" defer></script>
-  <script src="./game.js?v=13" defer></script>
+  <script src="./engine.js?v=7" defer></script>
+  <script src="./planarity.js?v=3" defer></script>
+  <script src="./puzzles.js?v=11" defer></script>
+  <script src="./game.js?v=14" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -124,7 +124,7 @@
           </div>
           <p id="editor-tip" class="editor-tip"></p>
           <div class="actions" id="editor-actions">
-            <button class="primary" id="solve-draft"><svg><use href="#i-spark"/></svg>求解这题</button>
+            <button class="primary" id="solve-draft"><svg><use href="#i-spark"/></svg><span id="solve-draft-label">求解这题</span></button>
             <button class="secondary" id="play-draft">开始试玩</button>
           </div>
           <div class="quiet" id="edit-quiet">
