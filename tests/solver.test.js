@@ -6,6 +6,7 @@ const { gunzipSync } = require('node:zlib');
 require('../engine.js');
 require('../planarity.js');
 require('../puzzles.js');
+require('../solver-tracks.js');
 require('../solver-geometry.js');
 require('../exact-solver.js');
 
@@ -96,6 +97,80 @@ test('shared oblique tracks use exact squared capacity before any SMT call', () 
   };
   checkSolution(track(48), prepareExact(track(48)));
   assert.equal(prepareExact(track(46)).status, 'unsat');
+});
+
+function parallelTracks(counts, starts, ends, offset, radius = g.radius, diagonal = false) {
+  const points = [], controls = [];
+  for (let track = 0; track < counts.length; track++) {
+    const line = 150 + track * offset;
+    const from = [starts[track], line], to = [ends[track], line];
+    if (diagonal) to[1] += ends[track] - starts[track];
+    for (let i = 0; i < counts[track]; i++) {
+      controls.push(track % 2 ? g.rail(points.length, to, from, .5) : g.rail(points.length, from, to, .5));
+      points.push(from);
+    }
+  }
+  return g.createLevel({ points, edges: [], obstacles: [], controls, radius });
+}
+
+test('coupled parallel tracks pack 18 sliders without nonlinear solving', () => {
+  const level = parallelTracks([9, 9], [100, 100], [650, 650], 15);
+  checkSolution(level, prepareExact(level));
+});
+
+test('two independently roomy tracks are jointly unsatisfiable because of forced neighboring nodes', () => {
+  const level = parallelTracks([13, 4], [100, 100], [580, 580], 15);
+  assert.ok(12 * 33 < 480);
+  assert.ok(16 * Math.sqrt(33 ** 2 - 15 ** 2) < 480);
+  assert.equal(prepareExact(level).status, 'unsat');
+});
+
+test('a constrained rail subset can disprove a larger mixed puzzle', () => {
+  const rails = parallelTracks([13, 4], [100, 100], [580, 580], 15);
+  const points = [...rails.points, [450, 345]];
+  const controls = [...rails.controls, g.free(points.length - 1, points.at(-1))];
+  const level = g.createLevel({ points, controls, edges: [[0, points.length - 1]] });
+  assert.equal(prepareExact(level).status, 'unsat');
+});
+
+test('parallel oblique tracks use the same projected ordering in either endpoint direction', () => {
+  const level = parallelTracks([4, 4], [100, 100], [350, 350], 20, g.radius, true);
+  checkSolution(level, prepareExact(level));
+});
+
+test('integer ground truth matches scheduling for small overlapping tracks', () => {
+  const radius = 10 * 14 / 33;
+  for (let start = 102; start <= 109; start++) {
+    for (let width = 16; width <= 25; width++) {
+      const level = parallelTracks([2, 2], [100, start], [122, start + width], 6, radius);
+      assert.equal(g.clearances(level).nodes, 10);
+      const used = [];
+      const exhaustive = (i) => {
+        if (i === 4) return true;
+        const [lo, hi] = i < 2 ? [100, 122] : [start, start + width];
+        for (let x = lo; x <= hi; x++) {
+          if (used.some((other, j) => Math.abs(x - other) < (i < 2 || j >= 2 ? 10 : 8))) continue;
+          used.push(x);
+          if (exhaustive(i + 1)) return true;
+          used.pop();
+        }
+        return false;
+      };
+      // All branch gaps and interval endpoints are integers, so an earliest feasible schedule is integral.
+      const result = prepareExact(level);
+      assert.equal(result.status, exhaustive(0) ? 'solved' : 'unsat', `start=${start}, width=${width}`);
+    }
+  }
+});
+
+test('an irrational-width gap between the two certificates is retained for exact nonlinear solving', () => {
+  const level = parallelTracks([2, 1], [100, 100], [164.031243, 164.031243], 8);
+  const result = prepareExact(level);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.parts.map(({ controls }) => controls.length), [3]);
+  const completed = exact(level);
+  if (completed.status === 'solved') checkSolution(level, completed);
+  else assert.equal(completed.status, 'precision');
 });
 
 test('off-axis obstacle roots can be enclosed without losing a possible rail solution', () => {

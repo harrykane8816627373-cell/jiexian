@@ -1,6 +1,7 @@
 'use strict';
 
-importScripts('./engine.js?v=7', './planarity.js?v=3', './puzzles.js?v=11', './solver-geometry.js?v=1', './exact-solver.js?v=2');
+importScripts('./engine.js?v=7', './planarity.js?v=3', './puzzles.js?v=11', './solver-tracks.js?v=1',
+  './solver-geometry.js?v=2', './exact-solver.js?v=2');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');

@@ -5,12 +5,17 @@ const { runInNewContext } = require('node:vm');
 const { gunzipSync } = require('node:zlib');
 
 const repo = path.join(__dirname, '..');
-for (const name of ['engine.js', 'puzzles.js', 'solver-geometry.js', 'exact-solver.js']) require(path.join(repo, name));
+for (const name of ['engine.js', 'puzzles.js', 'solver-tracks.js', 'solver-geometry.js', 'exact-solver.js']) require(path.join(repo, name));
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const current = globalThis.JiexianExact;
 const sandbox = { Jiexian: g };
-runInNewContext(execFileSync('git', ['show', '170852e:exact-solver.js'], { cwd: repo, encoding: 'utf8' }), sandbox);
+const parallel = process.argv.includes('--parallel');
+const args = process.argv.slice(2).filter((arg) => arg !== '--parallel');
+const revision = parallel ? '2c917c1' : '170852e';
+const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
+if (parallel) runInNewContext(oldScript('solver-geometry.js'), sandbox);
+runInNewContext(oldScript('exact-solver.js'), sandbox);
 const previous = sandbox.JiexianExact;
 
 const z3 = require(path.join(repo, 'vendor/z3smt2w.js'))({
@@ -84,13 +89,32 @@ function coupled() {
   });
 }
 
+function parallelPacking(counts, length, offset, diagonal = false) {
+  const points = [], controls = [];
+  counts.forEach((count, track) => {
+    const a = [100, 150 + track * offset];
+    const b = [100 + length, a[1] + (diagonal ? length : 0)];
+    for (let i = 0; i < count; i++) {
+      controls.push(g.rail(points.length, a, b, .5));
+      points.push(g.interpolate(a, b, .5));
+    }
+  });
+  points.push([100, 488], [800, 488]);
+  return g.createLevel({ points, edges: [[points.length - 2, points.length - 1]], controls });
+}
+
 function report(level, solver, repetitions) {
   const results = Array.from({ length: repetitions }, () => run(solver, level)).sort((a, b) => a.time - b.time);
   const middle = results[Math.floor(results.length / 2)];
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = [
+const cases = parallel ? [
+  ['18 sliders on two coupled parallel tracks', parallelPacking([9, 9], 550, 15), 1],
+  ['17 sliders with too many forced same-track neighbors', parallelPacking([13, 4], 480, 15), 1],
+  ['8 sliders on parallel oblique tracks', parallelPacking([4, 4], 250, 20, true), 3],
+  ['one movable crossing', coupled(), 11],
+] : [
   ['one 0.002-unit gap', narrow(), 11],
   ['4 pairs of contracted domains', contraction(4), 7],
   ['4 pairs with moving edges', contraction(4, true), 7],
@@ -98,10 +122,10 @@ const cases = [
   ['32 sliders on one rail', packing(1, 32), 1],
   ['one movable crossing', coupled(), 11],
 ];
-if (process.argv.length >= 4) {
-  const solver = process.argv[3] === 'before' ? previous : current;
+if (args.length >= 2) {
+  const solver = args[1] === 'before' ? previous : current;
   run(solver, narrow());
-  const [, level, repeats] = cases[Number(process.argv[2])];
+  const [, level, repeats] = cases[Number(args[0])];
   console.log(JSON.stringify(report(level, solver, repeats)));
   process.exit(0);
 }
@@ -111,7 +135,8 @@ for (const [index, [name, level]] of cases.entries()) {
     variables: level.controls.map(({ kind }) => kind === 'rail' ? 1 : 2).reduce((a, b) => a + b, 0),
     components: problem.parts?.map(({ controls }) => controls.length) ?? [] };
   for (const tag of ['before', 'after']) {
-    const child = spawnSync(process.execPath, [__filename, String(index), tag], { timeout: 7000, encoding: 'utf8' });
+    const child = spawnSync(process.execPath, [__filename, String(index), tag, ...(parallel ? ['--parallel'] : [])],
+      { timeout: 7000, encoding: 'utf8' });
     result[tag] = child.error ? child.error.code : child.status === 0 ? JSON.parse(child.stdout) : child.stderr.trim();
   }
   console.log(JSON.stringify(result));
