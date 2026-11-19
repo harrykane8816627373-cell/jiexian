@@ -7,11 +7,11 @@
   <meta name="description" content="解线是一款拖动节点、理顺连线的空间益智游戏。按难度随机出题，也可以自己摆点连线并求解。">
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
-  <link rel="stylesheet" href="./style.css?v=8">
+  <link rel="stylesheet" href="./style.css?v=9">
   <script src="./engine.js?v=6" defer></script>
   <script src="./planarity.js?v=2" defer></script>
-  <script src="./puzzles.js?v=7" defer></script>
-  <script src="./game.js?v=10" defer></script>
+  <script src="./puzzles.js?v=8" defer></script>
+  <script src="./game.js?v=11" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -92,7 +92,7 @@
             <label><input type="radio" name="rank" value="hard"><span>困难</span></label>
           </fieldset>
           <div class="settings">
-            <label>节点数 <input id="node-count" type="number" min="4" max="24" step="1" inputmode="numeric" placeholder="自动（6）"></label>
+            <label>节点数 <input id="node-count" type="number" min="4" max="36" step="1" inputmode="numeric" placeholder="自动（6）"></label>
             <label>模式 <select id="mechanism"></select></label>
           </div>
           <button class="primary generate" type="submit"><svg><use href="#i-shuffle"/></svg>生成新题</button>

@@ -3,7 +3,7 @@
 
   const g = globalThis.Jiexian;
   const minNodes = 4;
-  const maxNodes = 24;
+  const maxNodes = 36;
   const difficulty = {
     easy: { label: '简单', nodes: 6, edgeFactor: 1.18, scramble: 0.22, target: 1, active: .58, maxAngle: 1.4, groups: 2, maxTrackNodes: 5 },
     medium: { label: '中等', nodes: 10, edgeFactor: 1.6, scramble: 0.52, target: 3, active: .76, maxAngle: 2.4, groups: 3, maxTrackNodes: 8 },
@@ -164,9 +164,16 @@
     const inside = trackNodes ? 0 : count >= 10 && rank === 'hard' ? 2 : count >= 6 && rank !== 'easy' ? 1 : 0;
     const ring = count - trackNodes - inside;
     const phase = random() * 2 * Math.PI;
+    // A wider ellipse and less jitter keep the perimeter nodes apart on large boards.
+    const denseRing = ring > 24;
+    const spread = denseRing ? .06 : .20;
+    const radiusX = denseRing ? 345 : 315;
+    const radiusY = denseRing ? 219 : 187;
+    const jitterX = denseRing ? 7 : 25;
+    const jitterY = denseRing ? 4 : 20;
     const points = Array.from({ length: ring }, (_, i) => {
-      const angle = phase + (i + random() * .20) * 2 * Math.PI / ring;
-      return [450 + (315 + random() * 25) * Math.cos(angle), 270 + (187 + random() * 20) * Math.sin(angle)];
+      const angle = phase + (i + random() * spread) * 2 * Math.PI / ring;
+      return [450 + (radiusX + random() * jitterX) * Math.cos(angle), 270 + (radiusY + random() * jitterY) * Math.sin(angle)];
     });
     for (let i = 0; i < inside; i++) {
       points.push([450 + (i - (inside - 1) / 2) * 205 + (random() - .5) * 48, 270 + (random() - .5) * 106]);

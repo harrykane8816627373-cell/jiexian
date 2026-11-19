@@ -613,7 +613,7 @@
     historyMotion = null;
     const before = currentSnapshot();
     const playback = { state: g.copy(state), index: steps[0].index };
-    const duration = reducedMotion.matches ? 0 : steps.length === 1 ? 480 : 320;
+    const duration = reducedMotion.matches ? 0 : steps.length === 1 ? 480 : Math.min(320, 4800 / steps.length);
     animation = playback;
     hover = -1;
     setStatus(singleStep ? '正在演示下一步…' : '正在逐步解开…');

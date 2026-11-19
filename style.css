@@ -10,6 +10,7 @@
   --green: #246642;
   --red: #b62330;
   --focus: #265c9c;
+  --page-width: calc(100% - clamp(44px, 4vw, 80px));
   font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
 }
 
@@ -25,7 +26,7 @@ button svg { width: 17px; height: 17px; flex: none; fill: none; stroke: currentC
 .symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
 
 .top { background: var(--surface); border-bottom: 1px solid var(--border); }
-.top-inner { width: min(1260px, calc(100% - 80px)); margin: auto; height: 76px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+.top-inner { width: var(--page-width); margin: auto; height: 76px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
 .brand { display: flex; gap: 11px; align-items: center; }
 .brand img { display: block; border-radius: 12px; }
 .brand strong, .brand span { display: block; }
@@ -38,7 +39,7 @@ button svg { width: 17px; height: 17px; flex: none; fill: none; stroke: currentC
 .modes button:hover:not([aria-pressed="true"]), .rules-button:hover { color: var(--text); background: #ebebe9; }
 .rules-button { justify-self: end; min-height: 40px; padding: 0 12px; border-color: var(--border); }
 
-main { width: min(1260px, calc(100% - 80px)); margin: 0 auto; padding: 34px 0 36px; }
+main { width: var(--page-width); margin: 0 auto; padding: 26px 0 20px; }
 .intro { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 24px; }
 .level-label { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .075em; display: flex; align-items: center; gap: 9px; }
 .label-dot { width: 4px; height: 4px; border-radius: 50%; background: #81817d; }
@@ -58,11 +59,10 @@ h1 { font-size: clamp(33px, 4.1vw, 52px); margin: 8px 0 7px; line-height: 1.2; l
 .board-card { overflow: hidden; }
 .board-view {
   position: relative;
-  height: clamp(405px, 41vw, 554px);
   isolation: isolate;
   background: #fff;
 }
-#board { display: block; width: 100%; height: 100%; outline-offset: -3px; cursor: grab; touch-action: none; }
+#board { position: absolute; inset: 0; display: block; width: 100%; height: 100%; outline-offset: -3px; cursor: grab; touch-action: none; }
 #board.dragging { cursor: grabbing !important; }
 .board-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--border); background: var(--soft); }
 .view-tools { display: flex; gap: 2px; }
@@ -132,6 +132,14 @@ dialog p, dialog dd { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .mechanics dt { color: var(--text); font-size: 13px; font-weight: 650; }
 .mechanics dd { margin: 0; }
 
+@media (min-width: 731px) {
+  main { display: grid; grid-template-rows: auto 1fr; min-height: calc(100dvh - 77px); }
+  .layout { align-items: stretch; }
+  .board-card { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+  .board-view { min-height: 375px; }
+  .sidebar { align-content: start; }
+}
+
 @media (max-width: 960px) {
   .top-inner, main { width: calc(100% - 44px); }
   .layout { grid-template-columns: minmax(0, 1fr) 263px; gap: 15px; }
@@ -139,6 +147,7 @@ dialog p, dialog dd { color: var(--muted); font-size: 13px; line-height: 1.65; }
 }
 @media (max-width: 730px) {
   .top-inner, main { width: calc(100% - 28px); }
+  main { width: calc(100% - 20px); }
   .top-inner { height: 62px; gap: 8px; }
   .brand { gap: 7px; }
   .brand img { width: 34px; height: 34px; border-radius: 9px; }
