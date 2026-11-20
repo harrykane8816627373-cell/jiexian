@@ -467,40 +467,82 @@
     }));
   }
 
-  function searchConstrained(puzzle, drawings, current) {
+  function searchConstrained(puzzle, drawings, current, { candidate, problem, offer } = {}) {
     const random = randomFrom(17257833 + puzzle.edges.length * 17);
     const score = (state) => g.evaluate(puzzle, g.positions(puzzle, state));
-    const projected = drawings.slice(0, 7).flatMap((drawing) =>
-      [0, Math.PI / 2, Math.PI].map((angle) => projectState(puzzle, fitDrawing(drawing, angle))));
-    const starts = current === puzzle.initial ? [current] : [current, puzzle.initial];
-    const seeds = [...starts, ...projected]
+    const bounds = problem?.railBounds.map((range) => range?.map(([n, d]) => Number(n) / Number(d))) ?? [];
+    const regionSamples = new Map();
+    for (const part of problem?.parts ?? []) {
+      for (const [i, { scale, boxes }] of part.cuts ?? []) {
+        const control = puzzle.controls[i];
+        const samples = boxes.map((box) => box.map(([lo, hi]) => (Number(lo) + Number(hi)) / (2 * Number(scale))));
+        regionSamples.set(i, samples.map(([x, y]) => g.normalize(control,
+          control.kind === 'rotor' ? [Math.atan2(y, x)] : control.kind === 'rail' ? [x] : [x, y])));
+      }
+    }
+    const guide = (state) => state.map((value, i) => {
+      const packed = problem?.packed.get(i);
+      if (packed) return packed;
+      const range = bounds[i];
+      return range ? [g.clamp(value[0], ...range)] : value;
+    });
+    const projected = drawings.slice(0, 8).flatMap((drawing) =>
+      [0, Math.PI / 6, -Math.PI / 6, Math.PI / 2, Math.PI].map((angle) => projectState(puzzle, fitDrawing(drawing, angle))));
+    const starts = candidate && candidate !== current ? [candidate, current, puzzle.initial] : [current, puzzle.initial];
+    const guided = problem ? [...starts, ...projected].map(guide) : [];
+    const sampled = regionSamples.size ? guide(current.map((value, i) => {
+      const control = puzzle.controls[i];
+      return regionSamples.get(i)?.reduce((best, point) =>
+        g.moveDistance(control, value, point) < g.moveDistance(control, value, best) ? point : best) ?? value;
+    })) : current;
+    const seeds = [...new Set([...starts, sampled, ...guided, ...projected])]
       .map((state) => ({ state, count: score(state).count }))
       .sort((a, b) => a.count - b.count);
     if (!seeds[0].count) return seeds[0].state;
     if (!puzzle.controls.length) return null;
+    let fewest = seeds[0].count;
+    offer?.(seeds[0].state, fewest);
+    const remember = (state, count) => {
+      if (count >= fewest) return;
+      fewest = count;
+      offer?.([...state], count);
+    };
     const indices = puzzle.controls.map((_, i) => i);
+    const nodes = puzzle.points.length, edges = puzzle.edges.length;
+    const workPerCheck = nodes * nodes + edges * (nodes + edges) + (nodes + edges) * puzzle.obstacles.length;
+    const budget = g.clamp(Math.floor(10_000_000 / Math.max(1, workPerCheck)), 1200, 11_000);
     let checks = 0;
-    for (let restart = 0; restart < 18 && checks < 2600; restart++) {
-      const base = seeds[restart % Math.min(6, seeds.length)].state;
-      const state = base.map((value, i) => restart > 5 && random() < .34 ? randomValue(puzzle.controls[i], random) : value);
+    for (let restart = 0; restart < 30 && checks < budget; restart++) {
+      const base = seeds[restart % Math.min(9, seeds.length)].state;
+      const randomize = (control, i) => {
+        const range = bounds[i];
+        return range ? [range[0] + random() * (range[1] - range[0])] : randomValue(control, random);
+      };
+      let state = base.map((value, i) => restart > 7 && random() < .34 ? randomize(puzzle.controls[i], i) : value);
+      if (problem && restart % 3 !== 2) state = guide(state);
       let faults = score(state);
       if (!faults.count) return state;
-      for (let pass = 0; pass < 4 && checks < 2600; pass++) {
+      remember(state, faults.count);
+      for (let pass = 0; pass < 6 && checks < budget; pass++) {
         for (const i of shuffle(indices, random)) {
+          if (checks >= budget) break;
           if (!puzzle.controls[i].members.some((node) => faults.badNodes.has(node))) continue;
           const control = puzzle.controls[i];
           const current = state[i];
+          const [lo, hi] = bounds[i] ?? [0, 1];
           const candidates = control.kind === 'rotor' || control.kind === 'rail' ?
-            Array.from({ length: 15 }, (_, n) => control.kind === 'rotor' ? [n * Math.PI * 2 / 15] : [n / 14]) :
-            Array.from({ length: 12 }, (_, n) => {
-              const radius = n < 6 ? 45 : 150;
+            Array.from({ length: 21 }, (_, n) => control.kind === 'rotor' ?
+              [n * Math.PI * 2 / 21] : [lo + (hi - lo) * (n / 20)]) :
+            Array.from({ length: 18 }, (_, n) => {
+              const radius = n < 6 ? 18 : n < 12 ? 65 : 185;
               const dx = (random() - .5) * radius * 2;
               const dy = (random() - .5) * radius * 2;
               return g.normalize(control, [current[0] + dx, current[1] + dy]);
-            }).concat(Array.from({ length: 4 }, () => randomValue(control, random)));
+            }).concat(Array.from({ length: 4 }, () => randomize(control, i)));
           let bestValue = current;
           let best = faults;
-          for (const value of candidates) {
+          for (const value of [...(regionSamples.get(i) ?? []), ...candidates]) {
+            if (checks >= budget) break;
             state[i] = value;
             const trial = score(state);
             checks++;
@@ -512,17 +554,18 @@
           }
           faults = best;
           state[i] = bestValue;
+          remember(state, faults.count);
         }
       }
     }
     return null;
   }
 
-  function searchDraft(puzzle, current = puzzle.initial) {
+  function searchDraft(puzzle, current = puzzle.initial, options) {
     if (!g.evaluate(puzzle, g.positions(puzzle, current)).count) return current;
     if (!puzzle.controls.length) return null;
     const drawings = globalThis.JiexianDrawing(puzzle.points.length, puzzle.edges);
-    return drawings ? searchConstrained(puzzle, drawings, current) : null;
+    return drawings ? searchConstrained(puzzle, drawings, current, options) : null;
   }
 
   function searchObstacles(puzzle, current = puzzle.initial) {

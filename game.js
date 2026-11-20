@@ -3,6 +3,7 @@
 
   const g = globalThis.Jiexian;
   const puzzles = globalThis.JiexianPuzzles;
+  const mechanismEditor = globalThis.JiexianEditorMechanisms;
   const byId = (id) => document.getElementById(id);
   const board = byId('board');
   const ctx = board.getContext('2d');
@@ -29,7 +30,7 @@
   const tools = {
     add: '点棋盘空白处添加一个节点。',
     edge: '依次点两个节点，为它们连线。',
-    move: '拖动节点调整位置。拖动空白处平移。',
+    move: '拖动节点调整位置。拖实心手柄移动机制，拖空心手柄调整禁行区半径或滑轨端点。拖动星盘节点可改变它的轨道半径。',
     mechanism: '',
     erase: '点节点删除它及相连的线，也可以单独点线删除。',
   };
@@ -234,7 +235,7 @@
   }
 
   function updateControls() {
-    const dragging = moving?.kind === 'node';
+    const dragging = moving?.kind === 'node' || moving?.kind === 'mechanism';
     const busy = !!animation || dragging;
     byId('solve').disabled = dragging || animation?.singleStep === true;
     const solveLabel = search ? '取消搜索' : animation && !animation.singleStep ?
@@ -403,11 +404,11 @@
     confirm.disabled = kind === 'rail' ? anchors.length !== 2 || !members.length : members.length < 2;
     const tips = {
       mirror: members.length ? '已选第一个节点，再点一个自由节点建立联动。' : '点两个自由节点建立一组。可以重复建立多组。',
-      rotor: anchors.length ? `已选 ${members.length} 个节点。选至少两个，再确认。` : '点空白处设圆心，或点已建星盘的节点来编辑成员。',
-      rail: anchors.length === 0 ? '点滑轨起点，或点已有滑轨节点来编辑成员。' :
+      rotor: anchors.length ? `已选 ${members.length} 个节点。选至少两个，再确认。` : '点空白处设圆心，或点已有星盘的节点编辑成员。用「移动」调整已有星盘的位置和半径。',
+      rail: anchors.length === 0 ? '点滑轨起点，或点已有滑轨节点编辑成员。用「移动」调整已有滑轨的端点。' :
         anchors.length === 1 ? '再点终点。' : `已选 ${members.length} 个节点。选择节点后确认，它们会吸附到同一条轨道。`,
       fixed: '点击自由节点切换固定状态。',
-      obstacle: anchors.length ? '再点一个位置确定圆形禁行区的半径。' : '点空白处设禁行区圆心。',
+      obstacle: anchors.length ? '再点一个位置确定圆形禁行区的半径。' : '点空白处设禁行区圆心。用「移动」调整已有禁行区的位置和大小。',
       release: '点节点解除所在机制，或点禁行区删除它。',
     };
     byId('editor-tip').textContent = active ? tips[kind] : tools[activeTool];
@@ -618,16 +619,12 @@
       // File URLs cannot load a same-origin worker or fetch its WebAssembly.
       setTimeout(() => {
         if (search !== job) return;
-        const repair = globalThis.JiexianCoupledRepair.repair(puzzle, current) ??
-          globalThis.JiexianRepair.repair(puzzle, current);
-        if (repair) { receive(repair); return; }
-        const answer = puzzles.searchObstacles(puzzle, current) ?? puzzles.searchDraft(puzzle, current);
-        receive(answer ? { status: 'solved', state: answer } : { status: 'local' });
+        receive(globalThis.JiexianSolverSearch.search(puzzle, current));
       }, 0);
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=7');
+      job.worker = new Worker('./solver-worker.js?v=8');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current });
@@ -772,7 +769,7 @@
   }
 
   function zoom(factor, from = [size.w / 2, size.h / 2], to = from) {
-    if (moving?.kind === 'node') return;
+    if (moving?.kind === 'node' || moving?.kind === 'mechanism') return;
     const nextZoom = g.clamp(view.zoom * factor, minZoom, maxZoom);
     const ratio = nextZoom / view.zoom;
     const cx = size.w / 2;
@@ -781,7 +778,7 @@
   }
 
   function resetView() {
-    if (moving?.kind === 'node') return;
+    if (moving?.kind === 'node' || moving?.kind === 'mechanism') return;
     view = { x: 0, y: 0, zoom: 1 };
     updateControls();
     render();
@@ -841,13 +838,26 @@
     return found;
   }
 
+  function mechanismHandleAt(point, touch) {
+    if (!editing || activeTool !== 'move') return null;
+    let best = null;
+    let distance = (touch ? 15 : 10) / transform().k;
+    for (const handle of mechanismEditor.handles(draft)) {
+      const gap = g.distance(point, handle.point);
+      if (gap >= distance) continue;
+      distance = gap;
+      best = handle;
+    }
+    return best;
+  }
+
   function pinchSample() {
     const [a, b] = touches.values();
     return { center: g.interpolate(a, b, .5), distance: Math.max(1, g.distance(a, b)) };
   }
 
   function beginPointer(action) {
-    if (action.kind === 'node') cancelSearch('');
+    if (action.kind === 'node' || action.kind === 'mechanism') cancelSearch('');
     moving = action;
     hover = -1;
     selection = -1;
@@ -883,11 +893,18 @@
       else editAt(point, node);
       return;
     }
-    if (node !== -1 && level.ownership[node] === -1) {
+    let handle = mechanismHandleAt(point, touch);
+    if (!handle && editing && node !== -1) {
+      const index = draft.groups.findIndex((group) => group.kind === 'rotor' && group.members.includes(node));
+      if (index >= 0 && !event.shiftKey) handle = { kind: 'rotor', index, anchor: 'member', point: draft.points[node], node };
+      else if (level.ownership[node] === -1) handle = { kind: 'fixed', index: node, point: draft.points[node] };
+    }
+    if (handle) {
+      beginPointer({ kind: 'mechanism', point, handle, id });
+    } else if (node !== -1 && level.ownership[node] === -1) {
       setStatus('这个锚点固定在原位。');
       return;
-    }
-    if (node !== -1) {
+    } else if (node !== -1) {
       const index = level.ownership[node];
       beginPointer({ kind: 'node', node, index, point, before: currentSnapshot(), id });
     } else {
@@ -909,10 +926,13 @@
     }
     if (!moving) {
       if (touch || animation || historyMotion) return;
-      const found = hitTest(toWorld(at), false);
+      const point = toWorld(at);
+      const found = hitTest(point, false);
+      const handle = mechanismHandleAt(point, false);
+      board.style.cursor = handle && handle.anchor !== 'center' ? 'move' :
+        editing && activeTool !== 'move' ? 'crosshair' : !editing && found !== -1 && level.ownership[found] === -1 ? 'default' : 'grab';
       if (hover === found) return;
       hover = found;
-      board.style.cursor = editing && activeTool !== 'move' ? 'crosshair' : hover !== -1 && level.ownership[hover] === -1 ? 'default' : 'grab';
     } else if (moving.id === event.pointerId) {
       if (moving.kind === 'editTap') {
         if (g.distance(at, moving.at) < 8) return;
@@ -921,6 +941,10 @@
       if (moving.kind === 'pan') {
         setView(view.x + at[0] - moving.at[0], view.y + at[1] - moving.at[1]);
         moving.at = at;
+      } else if (moving.kind === 'mechanism') {
+        const delta = toWorld(at).map((value, axis) => value - moving.point[axis]);
+        moving.nextDraft = mechanismEditor.drag(draft, moving.handle, delta);
+        moving.preview = moving.nextDraft === draft ? null : puzzles.authored(moving.nextDraft);
       } else {
         const { node, index, before } = moving;
         state[index] = g.dragValue(level, node, toWorld(at), before.state[index], moving.point);
@@ -951,6 +975,10 @@
     if (action.kind === 'editTap' && event.type === 'pointerup' && !animation && !historyMotion) {
       const point = toWorld(action.at);
       editAt(point, hitTest(point, true));
+    }
+    if (action.kind === 'mechanism' && event.type === 'pointerup' && action.preview) {
+      replaceDraft(action.nextDraft);
+      return;
     }
     if (action.kind === 'node') {
       const previous = action.before.state[action.index];
@@ -1033,9 +1061,10 @@
     const motion = sampleHistoryMotion(now);
     if (motion) render();
     else historyMotion = null;
-    const shownLevel = motion?.shownLevel ?? level;
+    const preview = moving?.preview;
+    const shownLevel = preview ?? motion?.shownLevel ?? level;
     const active = animation?.state ?? motion?.state ?? state;
-    const points = motion?.points ?? g.positions(level, active);
+    const points = preview ? g.positions(preview, preview.initial) : motion?.points ?? g.positions(level, active);
     const faults = g.evaluate(shownLevel, points);
     if (!motion) updateStats(faults.count);
     if (!size.w || !size.h) return;
@@ -1200,6 +1229,15 @@
       }
     });
     ctx.globalAlpha = 1;
+    if (editing && activeTool === 'move' && !motion) {
+      const handles = mechanismEditor.handles(moving?.nextDraft ?? draft);
+      ctx.lineWidth = 1.8 / k;
+      for (const { kind, index, anchor, point } of handles) {
+        const selected = moving?.handle?.kind === kind && moving.handle.index === index && moving.handle.anchor === anchor;
+        const color = '#28536e';
+        circle(point, (selected ? 8 : 6) / k, anchor === 'center' ? color : '#fff', anchor === 'center' ? '#fff' : color);
+      }
+    }
   }
 
   function render() {

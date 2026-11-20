@@ -9,6 +9,7 @@ require('../solver-obstacles.js');
 require('../solver-repair.js');
 require('../solver-coupled-repair.js');
 require('../puzzles.js');
+require('../solver-search.js');
 require('../solver-tracks.js');
 require('../solver-regions.js');
 require('../solver-geometry.js');
@@ -19,7 +20,7 @@ const puzzles = globalThis.JiexianPuzzles;
 const { prepareExact, solveExact } = globalThis.JiexianExact;
 const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
-const { screenshotDraft, coupledScreenshotDraft } = require('./repair-fixture.cjs');
+const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft } = require('./repair-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -402,6 +403,75 @@ test('joint obstacle repair solves 48 perturbations of the screenshot geometry',
     const answer = repairTogether(level, level.initial);
     assert.equal(answer?.status, 'solved', `perturbation ${sample}`);
     assert.equal(g.evaluate(level, g.positions(level, answer.state)).count, 0);
+  }
+});
+
+test('a mixed obstacle, crossing and node-edge conflict stays in fast joint repair', () => {
+  const level = puzzles.authored(mixedScreenshotDraft());
+  const kinds = [];
+  g.evaluate(level, level.points, (_, kind) => kinds.push(kind));
+  assert.deepEqual(kinds, ['edge-obstacle', 'node-edge', 'crossing']);
+  const result = globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail('unexpected exact phase'));
+  checkSolution(level, result);
+  assert.equal(result.preserveRepair, true);
+});
+
+test('contracted rail bounds feed a narrow mixed puzzle back into the fast search', () => {
+  const draft = railDraft(283.124, 349.126);
+  draft.points.push([780, 80]);
+  const level = puzzles.authored(draft);
+  assert.equal(prepareExact(level).status, 'ready');
+  assert.equal(puzzles.searchDraft(level), null);
+  const result = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+  checkSolution(level, result);
+  const [x] = g.positions(level, result.state)[0];
+  assert.ok(x >= 316.124 && x <= 316.126);
+});
+
+test('the exact solver fixes a seeded rail conflict with the other control frozen', () => {
+  const points = [[240, 270], [450, 270], [240, 270]];
+  const level = g.createLevel({ points, edges: [], controls: [
+    g.rail(0, [240, 270], [300, 270], 0), g.free(1, points[1]),
+  ] });
+  const problem = prepareExact(level);
+  assert.equal(problem.status, 'ready');
+  const context = init();
+  const trace = [];
+  try {
+    const result = solveExact(level, (command) => {
+      trace.push(command);
+      return ask(context, command);
+    }, problem, level.initial);
+    checkSolution(level, result);
+    assert.deepEqual(result.state[1], points[1]);
+    assert.equal(result.preserveRepair, true);
+    assert.equal(trace.filter((command) => command.startsWith('(set-option :rlimit 80000')).length, 1);
+    assert.equal(trace.includes('(reset)'), false);
+  } finally {
+    destroy(context);
+  }
+});
+
+test('an impossible frozen neighborhood falls through to a solution with both controls movable', () => {
+  const points = [[240, 270], [300, 270], [240, 270]];
+  const level = g.createLevel({ points, edges: [], controls: [
+    g.rail(0, [240, 270], [300, 270], 0), g.free(1, points[1]),
+  ] });
+  const problem = prepareExact(level);
+  const context = init();
+  const checks = [];
+  try {
+    const result = solveExact(level, (command) => {
+      const response = ask(context, command);
+      if (command === '(check-sat-using qfnra-nlsat)') checks.push(response.trim());
+      return response;
+    }, problem, level.initial);
+    checkSolution(level, result);
+    assert.equal(checks[0], 'unsat');
+    assert.ok(checks.includes('sat'));
+    assert.notDeepEqual(result.state[1], points[1]);
+  } finally {
+    destroy(context);
   }
 });
 

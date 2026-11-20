@@ -99,11 +99,12 @@
       return { index: i, names };
     });
 
-    const constraints = part.records.map(({ kind, vertices, distance, support }, i) => {
+    const constraints = part.records.map((record, i) => {
+      const { kind, vertices, distance, support } = record;
       const [a, b, c, d] = vertices.map((node) => points[node]);
       const formula = kind === 'distance' ? call('>=', normSquared(vector(a, b)), square(real(distance))) :
         kind === 'segment' ? segmentClear(c, a, b, distance) : or(sameSide(a, b, c, d), sameSide(c, d, a, b));
-      return { name: define(`clear${i}`, 'Bool', formula), unary: support.length === 1 };
+      return { name: define(`clear${i}`, 'Bool', formula), unary: support.length === 1, record };
     });
     return { setup, constraints, controls };
   }
@@ -125,17 +126,23 @@
     return negative ? -number : number;
   }
 
-  function solvePart(level, coordinates, railBounds, part, query, state) {
+  function solvePart(level, coordinates, railBounds, part, query, state, preferred, limit) {
     const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part);
-    const pending = constraints.filter(({ unary }) => !unary).map(({ name }) => name);
+    const first = [], pending = [];
+    let prioritized = 0;
+    for (const { name, unary, record } of constraints) {
+      if (unary || preferred?.has(record) && prioritized++ < 24) first.push(name);
+      else pending.push(name);
+    }
     const enforce = (names) => {
       for (let i = 0; i < names.length; i += 256) {
         query(names.slice(i, i + 256).map((name) => call('assert', name)).join('\n'));
       }
     };
     for (let i = 0; i < setup.length; i += 64) query(setup.slice(i, i + 64).join('\n'));
-    enforce(constraints.filter(({ unary }) => unary).map(({ name }) => name));
-    while (true) {
+    if (limit) query('(set-option :rlimit 80000)');
+    enforce(first);
+    for (let pass = 0; !limit || pass < 4; pass++) {
       // Use NLSat on every relaxation, including after adding assertions.
       const result = query('(check-sat-using qfnra-nlsat)');
       if (result !== 'sat') return result === 'unsat' ? 'unsat' : 'unknown';
@@ -164,14 +171,26 @@
       }
       pending.length = remaining;
     }
+    return 'unknown';
   }
 
   const playable = (level, state) => !g.evaluate(level, g.positions(level, state)).count;
 
-  function prepareExact(level) {
+  function violations(part, points) {
+    const failed = [];
+    for (const record of part.records) {
+      const [a, b, c, d] = record.vertices.map((i) => points[i]);
+      const blocked = record.kind === 'distance' ? g.distance(a, b) < record.distance :
+        record.kind === 'segment' ? g.distanceToSegment(c, a, b) < record.distance : g.segmentsCross(a, b, c, d);
+      if (blocked) failed.push(record);
+    }
+    return failed;
+  }
+
+  function prepareExact(level, current = level.initial) {
     const problem = analyze(level);
     if (problem.unsat) return { status: 'unsat' };
-    const state = level.initial.map((value, i) => g.normalize(level.controls[i], value));
+    const state = current.map((value, i) => g.normalize(level.controls[i], value));
     for (const [index, value] of problem.packed) state[index] = value;
     if (!problem.parts.length) {
       if (playable(level, state)) return { status: 'solved', state };
@@ -180,7 +199,7 @@
     return { status: 'ready', ...problem, state };
   }
 
-  function solveExact(level, ask, problem = prepareExact(level)) {
+  function solveExact(level, ask, problem = prepareExact(level), seed) {
     if (problem.status !== 'ready') return problem;
     const { coordinates, railBounds, parts, retryParts } = problem;
     const state = g.copy(problem.state);
@@ -190,20 +209,67 @@
       if (reply.startsWith('(error')) throw new Error(reply);
       return reply;
     };
-    const solve = (part) => {
+    const solve = (part, points, target, preferred, limited = false) => {
       if (checks++) query('(reset)');
-      return solvePart(level, coordinates, railBounds, part, query, state);
+      return solvePart(level, points, railBounds, part, query, target, preferred, limited);
     };
+    let seedPoints;
+    const reusable = [];
+    if (seed) {
+      const trial = g.copy(seed);
+      for (const [i, value] of problem.packed) trial[i] = value;
+      const centers = coordinates.slice(level.points.length);
+      const positions = () => [...g.positions(level, trial), ...centers];
+      const limits = railBounds.map((range) => range?.map(([n, d]) => Number(n) / Number(d)));
+      const outside = (part) => part.controls.filter((i) => {
+        const range = limits[i];
+        return range && (trial[i][0] < range[0] || trial[i][0] > range[1]);
+      });
+      seedPoints = positions();
+
+      // A small exact repair is useful when the heuristic has left nearly all controls in a good place.
+      // The unrestricted problem below still decides every failure of this restricted attempt.
+      let attempts = 0;
+      for (const part of parts) {
+        if (attempts >= 3) break;
+        const failed = violations(part, seedPoints);
+        const active = new Set([...outside(part), ...failed.flatMap(({ support }) => support)]);
+        if (!active.size || active.size > 6 || active.size === part.controls.length) continue;
+        attempts++;
+        const controls = part.controls.filter((i) => active.has(i));
+        const records = part.records.flatMap((record) => {
+          const support = record.support.filter((i) => active.has(i));
+          return support.length ? [{ ...record, support }] : [];
+        });
+        const frozen = coordinates.map((point, i) => active.has(level.ownership[i]) ? point : seedPoints[i]);
+        const result = solve({ ...part, controls, records }, frozen, trial, null, true);
+        query('(set-option :rlimit 0)');
+        if (result === 'sat') seedPoints = positions();
+      }
+      if (playable(level, trial)) return { status: 'solved', state: trial, preserveRepair: true };
+      for (const part of parts) {
+        if (outside(part).length || violations(part, seedPoints).length) continue;
+        reusable.push(part);
+        for (const i of part.controls) state[i] = trial[i];
+      }
+    }
     let uncertain = false;
     for (const part of parts) {
-      const result = solve(part);
+      if (reusable.includes(part)) continue;
+      const preferred = seedPoints && new Set(violations(part, seedPoints));
+      const result = solve(part, coordinates, state, preferred);
       if (result === 'unsat') return { status: 'unsat' };
       if (result === 'unknown') uncertain = true;
     }
     if (uncertain) return { status: 'unknown' };
     if (playable(level, state)) return { status: 'solved', state };
-    // A geometrically certified position may round into a conflict. Try a new model for those parts.
-    for (const part of retryParts) solve(part);
+    // Try exact models for parts previously filled from geometry or reused from an approximate state.
+    for (const part of [...retryParts, ...reusable]) {
+      const result = solve(part, coordinates, state);
+      if (result === 'unsat') return { status: 'unsat' };
+      if (result === 'unknown') uncertain = true;
+    }
+    if (uncertain) return { status: 'unknown' };
     return playable(level, state) ? { status: 'solved', state } : { status: 'precision' };
   }
 

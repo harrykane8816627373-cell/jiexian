@@ -3,11 +3,11 @@ const { readFileSync } = require('node:fs');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { runInNewContext } = require('node:vm');
 const { gunzipSync } = require('node:zlib');
-const { screenshotDraft, coupledScreenshotDraft } = require('./repair-fixture.cjs');
+const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft } = require('./repair-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
 for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-repair.js', 'solver-coupled-repair.js', 'puzzles.js',
-  'solver-tracks.js', 'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
+  'solver-search.js', 'solver-tracks.js', 'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   require(path.join(repo, name));
 }
 const g = globalThis.Jiexian;
@@ -19,16 +19,19 @@ const obstacles = process.argv.includes('--obstacles');
 const obstacleOnly = process.argv.includes('--obstacle-only');
 const repairCase = process.argv.includes('--repair');
 const coupledCase = process.argv.includes('--coupled-repair');
-const pipeline = obstacleOnly || repairCase || coupledCase;
+const hybridCase = process.argv.includes('--hybrid');
+const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = coupledCase ? 'b00d685' : repairCase ? 'c516d53' : obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
+const revision = hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' : obstacleOnly ? '2c36708' :
+  obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
 const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
-if (coupledCase) runInNewContext(oldScript('engine.js'), sandbox);
+if (coupledCase || hybridCase) runInNewContext(oldScript('engine.js'), sandbox);
 if (pipeline) {
   for (const script of ['planarity.js', 'puzzles.js', 'solver-regions.js']) runInNewContext(oldScript(script), sandbox);
 }
-if (repairCase || coupledCase) runInNewContext(oldScript('solver-obstacles.js'), sandbox);
-if (coupledCase) runInNewContext(oldScript('solver-repair.js'), sandbox);
+if (repairCase || coupledCase || hybridCase) runInNewContext(oldScript('solver-obstacles.js'), sandbox);
+if (coupledCase || hybridCase) runInNewContext(oldScript('solver-repair.js'), sandbox);
+if (hybridCase) runInNewContext(oldScript('solver-coupled-repair.js'), sandbox);
 if (obstacles || pipeline) runInNewContext(oldScript('solver-tracks.js'), sandbox);
 if (parallel || obstacles || pipeline) runInNewContext(oldScript('solver-geometry.js'), sandbox);
 runInNewContext(oldScript('exact-solver.js'), sandbox);
@@ -45,15 +48,18 @@ function run(solver, level) {
   let context, checks = 0;
   const start = performance.now();
   try {
-    let problem;
-    if (pipeline) {
-      const runtime = solver === current ? globalThis : sandbox;
-      const repair = runtime.JiexianCoupledRepair?.repair(level, level.initial) ??
-        runtime.JiexianRepair?.repair(level, level.initial);
+    let problem, seed;
+    if (pipeline && solver === current) {
+      const phase = globalThis.JiexianSolverSearch.search(level, level.initial, solver.prepareExact);
+      if (phase.status !== 'ready') return { time: performance.now() - start, status: phase.status, checks };
+      ({ problem, candidate: seed } = phase);
+    } else if (pipeline) {
+      const repair = sandbox.JiexianCoupledRepair?.repair(level, level.initial) ??
+        sandbox.JiexianRepair?.repair(level, level.initial);
       if (repair) {
         return { time: performance.now() - start, status: 'solved', checks };
       }
-      const puzzles = solver === current ? globalThis.JiexianPuzzles : sandbox.JiexianPuzzles;
+      const puzzles = sandbox.JiexianPuzzles;
       if (puzzles.searchObstacles?.(level)) return { time: performance.now() - start, status: 'solved', checks };
       problem = solver.prepareExact(level);
       if (problem.status === 'ready' && puzzles.searchDraft(level)) {
@@ -64,7 +70,7 @@ function run(solver, level) {
       context ??= init();
       if (command === '(check-sat-using qfnra-nlsat)') checks++;
       return ask(context, command);
-    }, problem);
+    }, problem, seed);
     return { time: performance.now() - start, status: result.status, checks };
   } finally {
     if (context != null) destroy(context);
@@ -181,7 +187,9 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = coupledCase ? [
+const cases = hybridCase ? [
+  ['15-node screenshot with three different conflicts', puzzles.authored(mixedScreenshotDraft()), 11],
+] : coupledCase ? [
   ['15-node screenshot with only the 2–5 edge blocked', puzzles.authored(coupledScreenshotDraft()), 11],
 ] : repairCase ? [
   ['14-node screenshot reconstruction', puzzles.authored(screenshotDraft()), 1],

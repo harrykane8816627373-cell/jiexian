@@ -1,8 +1,8 @@
 'use strict';
 
-importScripts('./engine.js?v=9', './planarity.js?v=3', './solver-coupled-repair.js?v=1', './solver-repair.js?v=1',
-  './solver-obstacles.js?v=1', './puzzles.js?v=12', './solver-tracks.js?v=1', './solver-regions.js?v=1',
-  './solver-geometry.js?v=3', './exact-solver.js?v=3');
+importScripts('./engine.js?v=9', './planarity.js?v=3', './solver-coupled-repair.js?v=2', './solver-repair.js?v=1',
+  './solver-obstacles.js?v=1', './puzzles.js?v=13', './solver-search.js?v=1', './solver-tracks.js?v=1', './solver-regions.js?v=1',
+  './solver-geometry.js?v=3', './exact-solver.js?v=4');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');
@@ -23,38 +23,17 @@ async function loadZ3() {
 
 self.onmessage = async ({ data: { puzzle, current } }) => {
   try {
-    const repair = globalThis.JiexianCoupledRepair.repair(puzzle, current) ??
-      globalThis.JiexianRepair.repair(puzzle, current);
-    if (repair) {
-      self.postMessage(repair);
-      return;
-    }
-    const puzzles = globalThis.JiexianPuzzles;
-    const obstacleLayout = puzzles.searchObstacles(puzzle, current);
-    if (obstacleLayout) {
-      self.postMessage({ status: 'solved', state: obstacleLayout });
-      return;
-    }
     const { prepareExact, solveExact } = globalThis.JiexianExact;
-    const problem = prepareExact(puzzle);
-    if (problem.status === 'solved' || problem.status === 'unsat') {
-      self.postMessage(problem);
-      return;
-    }
-    const state = puzzles.searchDraft(puzzle, current);
-    if (state) {
-      self.postMessage({ status: 'solved', state });
-      return;
-    }
-    if (problem.status !== 'ready') {
-      self.postMessage(problem);
+    const result = globalThis.JiexianSolverSearch.search(puzzle, current, prepareExact);
+    if (result.status !== 'ready') {
+      self.postMessage(result);
       return;
     }
     self.postMessage({ status: 'exact' });
     const z3 = await loadZ3();
     const context = z3.init();
     try {
-      self.postMessage(solveExact(puzzle, (command) => z3.ask(context, command), problem));
+      self.postMessage(solveExact(puzzle, (command) => z3.ask(context, command), result.problem, result.candidate));
     } finally {
       z3.destroy(context);
     }

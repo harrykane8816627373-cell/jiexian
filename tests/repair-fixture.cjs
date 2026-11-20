@@ -31,4 +31,10 @@ function coupledScreenshotDraft() {
   return { points, edges, obstacles };
 }
 
-module.exports = { screenshotDraft, coupledScreenshotDraft };
+function mixedScreenshotDraft() {
+  const draft = coupledScreenshotDraft();
+  draft.points[1] = [24 + (872.5 - 156.5) * 852 / 1090, 24 + (722.5 - 169.9) * 492 / 630];
+  return draft;
+}
+
+module.exports = { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft };
