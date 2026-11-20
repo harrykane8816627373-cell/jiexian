@@ -8,6 +8,7 @@ const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactSc
 const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
+const { crossingScreenshotDraft } = require('./crossing-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
 const parallel = process.argv.includes('--parallel');
@@ -22,11 +23,12 @@ const breakoutCase = process.argv.includes('--breakout');
 const algebraCase = process.argv.includes('--algebra');
 const neighborhoodCase = process.argv.includes('--neighborhood');
 const blockCase = process.argv.includes('--block');
+const crossingCase = process.argv.includes('--crossing');
 const seededExact = neighborhoodCase || blockCase;
-const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || seededExact;
-const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase;
+const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || seededExact || crossingCase;
+const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase || crossingCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = blockCase ? '818a382' : neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
+const revision = crossingCase ? '9f482e2' : blockCase ? '818a382' : neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
   corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
   hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
   obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
@@ -37,11 +39,15 @@ for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-
   'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   // Use the same V8 realm in the two isolated subprocesses for the full-pipeline comparison.
   if (!historicalProcess || seededExact && name !== 'exact-solver.js') require(path.join(repo, name));
-  else if ((breakoutCase || algebraCase || name !== 'solver-obstacle-corridors.js') && (!contactCase || name !== 'solver-contact-repair.js')) {
+  else if ((breakoutCase || algebraCase || crossingCase || name !== 'solver-obstacle-corridors.js') &&
+      (!contactCase || name !== 'solver-contact-repair.js')) {
     runInThisContext(oldScript(name), { filename: name });
   }
 }
-if (!historicalProcess) require('../solver-breakout.js');
+if (!historicalProcess) {
+  require('../solver-breakout.js');
+  require('../solver-relaxation.js');
+} else if (crossingCase) runInThisContext(oldScript('solver-breakout.js'), { filename: 'solver-breakout.js' });
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const current = globalThis.JiexianExact;
@@ -212,7 +218,9 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = blockCase ? [
+const cases = crossingCase ? [
+  ['21-node screenshot with only one crossed pair', puzzles.authored(crossingScreenshotDraft()), 7, 1],
+] : blockCase ? [
   ['26 nodes with both edge endpoints three units above a narrow corridor', corridorLevel(g, { halfGap: .0001, shift: 3, rightShift: 3 }), 9, 1],
   ['26 nodes with the blocked edge requiring a change in slope', corridorLevel(g, { halfGap: .0001, shift: 3, rightShift: 9 }), 9, 1],
 ] : neighborhoodCase ? [

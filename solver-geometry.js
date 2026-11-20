@@ -97,6 +97,68 @@
     return numerator >= square(distance) * denominator;
   }
 
+  function obstacleBarrier(level, points, boxes, units, edgeLimits) {
+    if (!edgeLimits.length || !level.edges.length) return false;
+    const lower = units(g.margin);
+    const board = [[lower, units(g.width - g.margin)], [lower, units(g.height - g.margin)]];
+    const onBoard = (box) => box.every(([lo, hi], axis) => lo >= board[axis][0] && hi <= board[axis][1]);
+    const count = level.points.length;
+    const neighbors = Array.from({ length: count }, () => []);
+    const inside = boxes.slice(0, count).map(onBoard);
+    for (const [a, b] of level.edges) {
+      if (!inside[a] || !inside[b]) continue;
+      neighbors[a].push(b);
+      neighbors[b].push(a);
+    }
+    const disks = points.slice(count).map((center, i) => ({ center, radius: units(edgeLimits[i]), links: [] }))
+      .filter(({ center }) => onBoard(pointBox(center)));
+    disks.forEach((disk, i) => {
+      for (let j = 0; j < i; j++) {
+        const other = disks[j];
+        if (norm(vector(disk.center, other.center)) >= square(disk.radius + other.radius)) continue;
+        disk.links.push(j);
+        other.links.push(i);
+      }
+    });
+
+    function spans(axis, left, right) {
+      const across = 1 - axis;
+      const [lo, hi] = board[across];
+      const eligible = disks.map(({ center }) => left < center[axis] && center[axis] < right);
+      const reachable = new Set();
+      disks.forEach(({ center, radius }, i) => {
+        if (eligible[i] && center[across] - lo < radius) reachable.add(i);
+      });
+      // The center-to-center segments of an overlapping chain are forbidden
+      // points. A chain joining the other two sides separates these domains.
+      for (const i of reachable) {
+        const { center, radius, links } = disks[i];
+        if (hi - center[across] < radius) return true;
+        for (const j of links) if (eligible[j]) reachable.add(j);
+      }
+      return false;
+    }
+
+    const visited = new Set();
+    for (let i = 0; i < count; i++) {
+      if (!neighbors[i].length || visited.has(i)) continue;
+      const connected = new Set([i]);
+      for (const j of connected) {
+        visited.add(j);
+        for (const other of neighbors[j]) connected.add(other);
+      }
+      for (const axis of [0, 1]) {
+        let left = board[axis][1], right = board[axis][0];
+        for (const j of connected) {
+          left = min(left, boxes[j][axis][1]);
+          right = max(right, boxes[j][axis][0]);
+        }
+        if (left < right && spans(axis, left, right)) return true;
+      }
+    }
+    return false;
+  }
+
   function components(records, count) {
     const parent = Array.from({ length: count }, (_, i) => i);
     const root = (i) => {
@@ -180,6 +242,7 @@
     const { rails, tracks } = tracksData;
     const boxes = motionBoxes(level, points, rails, units);
     if (boxes.some((box) => box.some(([lo, hi]) => lo > hi))) return { unsat: true };
+    if (obstacleBarrier(level, points, boxes, units, edgeLimits)) return { unsat: true, reason: 'obstacle-barrier' };
     const edgeBoxes = level.edges.map(([a, b]) => boxUnion(boxes[a], boxes[b]));
     const rotorCenters = level.controls.map(({ kind, center }) => kind === 'rotor' ? center.map(units) : null);
     const records = [];

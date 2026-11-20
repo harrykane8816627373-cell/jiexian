@@ -17,6 +17,7 @@ require('../solver-regions.js');
 require('../solver-geometry.js');
 require('../exact-solver.js');
 require('../solver-breakout.js');
+require('../solver-relaxation.js');
 
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
@@ -28,6 +29,7 @@ const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactSc
 const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
+const { crossingScreenshotDraft } = require('./crossing-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -85,6 +87,15 @@ test('node to edge clearance is 16 including exact tangency', () => {
   assert.equal(prepareExact(tangent).status, 'solved');
   assert.equal(g.evaluate(near, near.points).count, 1);
   assert.equal(prepareExact(near).status, 'unsat');
+});
+
+test('the screenshot with a single crossed edge pair has a fully checked solution', () => {
+  const level = puzzles.authored(crossingScreenshotDraft());
+  const faults = [];
+  g.evaluate(level, level.points, (nodes, kind) => faults.push({ nodes, kind }));
+  assert.deepEqual(faults, [{ nodes: [16, 18, 9, 13], kind: 'crossing' }]);
+  const result = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+  checkSolution(level, result);
 });
 
 test('global search finds a 0.002-unit rail interval missed by the local search', () => {
@@ -362,6 +373,35 @@ test('a contradictory pair suffices to reject a much larger obstacle component',
     ...points.slice(6).map((p, i) => g.free(i + 6, p))];
   const level = g.createLevel({ points, edges: [[4, 5]], controls, obstacles: [{ center: [106, 42], r: 24 }] });
   assert.equal(prepareExact(level).status, 'unsat');
+});
+
+function diskBarrier() {
+  return [[432, 95], [475, 225], [441, 357], [475, 460]].map(([x, y]) => ({
+    center: [x, y], r: 72,
+  }));
+}
+
+test('a meandering chain of disks separates connected rail domains', () => {
+  const points = [[120, 125], [330, 275], [790, 125], [330, 390]];
+  const controls = [g.rail(0, [120, 125], [240, 125], 0), g.free(1, points[1]),
+    g.rail(2, [650, 125], [790, 125], 1), g.free(3, points[3])];
+  const level = g.createLevel({ points, controls, obstacles: diskBarrier(), edges: [[0, 1], [1, 3], [2, 3]] });
+  assert.deepEqual(prepareExact(level), { status: 'unsat', reason: 'obstacle-barrier' });
+});
+
+test('exactly tangent disks leave a legal edge through their point of contact', () => {
+  const points = [[100, 176], [800, 176]];
+  const obstacles = [100, 252, 404, 475].map((y) => ({ center: [450, y], r: 72 }));
+  const level = g.createLevel({ points, edges: [[0, 1]], controls: [], obstacles });
+  checkSolution(level, prepareExact(level));
+  const overlapping = { ...level, obstacles: obstacles.map((disk) => ({ ...disk, r: disk.r + .000001 })) };
+  assert.deepEqual(prepareExact(overlapping), { status: 'unsat', reason: 'obstacle-barrier' });
+});
+
+test('separated graph components can occupy opposite sides of a disk barrier', () => {
+  const points = [[100, 100], [200, 280], [650, 140], [800, 300]];
+  const level = g.createLevel({ points, edges: [[0, 1], [2, 3]], controls: [], obstacles: diskBarrier() });
+  checkSolution(level, prepareExact(level));
 });
 
 test('remaining rotor chart boxes are passed as exact cuts to the full mixed solver', () => {

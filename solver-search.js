@@ -33,6 +33,10 @@
     const state = puzzles.searchDraft(puzzle, current, { candidate, offer, problem: problem?.status === 'ready' ? problem : undefined });
     if (state) return { status: 'solved', state };
     if (problem?.status === 'ready' && puzzle.obstacles.length) {
+      if (initial.length === 1 && initial[0].kind === 'crossing') {
+        const rearranged = globalThis.JiexianSolverRelaxation.repair(puzzle, problem);
+        if (rearranged) return rearranged;
+      }
       const refined = globalThis.JiexianSolverBreakout.repair(puzzle, problem, current, candidate, fewest, offer);
       if (refined) return refined;
     }

@@ -285,7 +285,7 @@
 
   function prepareExact(level, current = level.initial) {
     const problem = analyze(level);
-    if (problem.unsat) return { status: 'unsat' };
+    if (problem.unsat) return problem.reason ? { status: 'unsat', reason: problem.reason } : { status: 'unsat' };
     const state = current.map((value, i) => g.normalize(level.controls[i], value));
     for (const [index, value] of problem.packed) state[index] = value;
     if (!problem.parts.length) {

@@ -24,7 +24,6 @@
   const timerHome = timer.parentElement;
   const gameControls = byId('game-controls');
   const historyDuration = 240;
-  const obstacleExactBudgets = [12_000, 45_000];
   const smoothStep = (t) => t * t * (3 - 2 * t);
   const turnKeys = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const labels = { free: '自由节点', mirror: '联动节点', rotor: '星盘节点', rail: '滑轨节点' };
@@ -107,7 +106,6 @@
   let view = { x: 0, y: 0, zoom: 1 };
   let animation = null;
   let search = null;
-  let exactRetry = null;
   let historyMotion = null;
   let suggestion = null;
   let hover = -1;
@@ -239,10 +237,9 @@
   function updateControls() {
     const dragging = moving?.kind === 'node' || moving?.kind === 'mechanism';
     const busy = !!animation || dragging;
-    const retryLabel = exactRetryFor(state) ? '延长判定' : null;
     byId('solve').disabled = dragging || animation?.singleStep === true;
     const solveLabel = search ? '取消搜索' : animation && !animation.singleStep ?
-      (animation.paused ? '继续求解' : '暂停求解') : retryLabel ?? '一键求解';
+      (animation.paused ? '继续求解' : '暂停求解') : '一键求解';
     if (byId('solve-label').textContent !== solveLabel) byId('solve-label').textContent = solveLabel;
     const compactSolve = byId('compact-solve');
     compactSolve.hidden = !(search && !editing) && (!animation || animation.singleStep);
@@ -263,7 +260,7 @@
     byId('draft-clear').disabled = !draft.points.length || dragging;
     byId('scramble-draft').disabled = dragging || !draft.edges.length;
     byId('solve-draft').disabled = dragging;
-    const draftSolveLabel = search ? '取消搜索' : retryLabel ?? '求解这题';
+    const draftSolveLabel = search ? '取消搜索' : '求解这题';
     if (byId('solve-draft-label').textContent !== draftSolveLabel) byId('solve-draft-label').textContent = draftSolveLabel;
     byId('play-draft').disabled = dragging;
     byId('edit-current').disabled = busy;
@@ -272,6 +269,7 @@
   function updateClock() {
     const text = clockText(timeSpent());
     if (byId('clock').textContent !== text) byId('clock').textContent = text;
+    if (search) updateSearchClock(search);
   }
 
   function refreshCompletion() {
@@ -584,57 +582,49 @@
     }
   }
 
+  function searchTime(started) {
+    return `${((performance.now() - started) / 1000).toFixed(2)} 秒`;
+  }
+
+  function updateSearchClock(job) {
+    const clock = clockText(performance.now() - job.started);
+    if (clock === job.clock) return;
+    job.clock = clock;
+    job.report(`正在进行全局判定 · 总用时 ${clock} · 可随时取消`);
+  }
+
   function cancelSearch(message) {
     if (!search) return;
-    clearTimeout(search.exactTimer);
-    search.worker?.terminate();
-    if (message !== undefined) search.report(message);
+    const job = search;
     search = null;
+    job.worker?.terminate();
+    if (message !== undefined) job.report(message ? `${message} 判定总用时 ${searchTime(job.started)}。` : '');
   }
 
-  function exactRetryFor(current) {
-    const target = editing ? draft : level;
-    return exactRetry && exactRetry.target === target && exactRetry.pose === JSON.stringify(current) ? exactRetry : null;
-  }
-
-  function requestWitness(puzzle, current, report, onSolved) {
-    const attempt = exactRetryFor(current)?.attempt ?? 0;
-    const limit = puzzle.obstacles.length ? obstacleExactBudgets[attempt] : undefined;
-    const target = editing ? draft : level;
-    exactRetry = null;
-    const job = { report };
+  function requestWitness(puzzle, current, report, onSolved, started = performance.now()) {
+    const job = { report, started };
     search = job;
-    report('正在搜索符合所有机制的布局…');
+    updateSearchClock(job);
     updateControls();
-    function receive({ status, state: answer, preserveRepair }) {
+    function receive({ status, state: answer, preserveRepair, reason }) {
       if (search !== job) return;
-      if (status === 'exact') {
-        report(limit ? `正在进行全局判定，本次最多 ${limit / 1000} 秒，可以随时取消。` :
-          '正在进行全局判定，可以随时取消。');
-        if (limit && !job.exactTimer) {
-          job.exactTimer = setTimeout(() => {
-            exactRetry = { target, pose: JSON.stringify(current), attempt: attempt + 1 };
-            receive({ status: 'timeout' });
-          }, limit);
-        }
-        return;
-      }
       cancelSearch();
       updateControls();
       if (status === 'solved' && !g.evaluate(puzzle, g.positions(puzzle, answer)).count) {
         puzzle.witness = answer;
         puzzle.preserveRepair = preserveRepair === true;
         report('');
-        onSolved();
+        onSolved(searchTime(job.started));
         return;
       }
       const messages = {
-        unsat: '已证明无解。当前机制和间距要求无法同时满足。',
+        unsat: reason === 'obstacle-barrier' ? '已证明无解。禁行区构成屏障，相连节点的活动范围被隔在两侧。' :
+          '已证明无解。当前机制和间距要求无法同时满足。',
         precision: '数学判定为有解，当前解转换成游戏坐标后未通过冲突检查。',
         local: '快速搜索未找到解。通过 HTTP 打开页面即可运行全局判定。',
-        timeout: `本次全局判定已用完 ${limit / 1000} 秒，当前是否有解尚未确定。可延长判定时间。`,
       };
-      report(messages[status] ?? '全局判定未完成，当前题目是否有解尚未确定。');
+      const message = messages[status] ?? '全局判定未完成，当前题目是否有解尚未确定。';
+      report(`${message} 判定总用时 ${searchTime(job.started)}。`);
     }
     if (location.protocol === 'file:') {
       // File URLs cannot load a same-origin worker or fetch its WebAssembly.
@@ -645,7 +635,7 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=14');
+      job.worker = new Worker('./solver-worker.js?v=15');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current });
@@ -655,6 +645,7 @@
   }
 
   function startDraft(solveNow) {
+    const started = performance.now();
     if (!draft.edges.length) {
       byId('editor-status').textContent = '请先放置节点并添加至少一条连线。';
       return;
@@ -662,15 +653,15 @@
     const result = puzzles.solveDraft(draft);
     const report = (message) => { byId('editor-status').textContent = message; };
     if (!result.puzzle) {
-      report(result.reason);
+      report(solveNow ? `${result.reason} 判定总用时 ${searchTime(started)}。` : result.reason);
       return;
     }
-    const play = () => {
+    const play = (duration) => {
       editing = false;
       load(result.puzzle);
-      if (solveNow) animate(false);
+      if (solveNow) animate(false, duration ?? searchTime(started));
     };
-    if (solveNow && !result.puzzle.witness) requestWitness(result.puzzle, result.puzzle.initial, report, play);
+    if (solveNow && !result.puzzle.witness) requestWitness(result.puzzle, result.puzzle.initial, report, play, started);
     else play();
   }
 
@@ -700,14 +691,15 @@
     mechanism.value = config.mechanism;
   }
 
-  function animate(singleStep) {
+  function animate(singleStep, totalTime) {
     if (!level.witness && !won) {
-      requestWitness(level, g.copy(state), setStatus, () => animate(singleStep));
+      requestWitness(level, g.copy(state), setStatus, (duration) => animate(singleStep, duration));
       return;
     }
+    const withTime = (message) => totalTime ? `${message} 判定总用时 ${totalTime}。`.trim() : message;
     const plan = suggestion ?? g.solve(level, state);
     if (!plan.length) {
-      setStatus('');
+      setStatus(withTime(''));
       return;
     }
     if (timerMode === 'idle') startClock();
@@ -719,7 +711,7 @@
     const duration = reducedMotion.matches ? 0 : steps.length === 1 ? 480 : Math.min(320, 4800 / steps.length);
     animation = playback;
     hover = -1;
-    setStatus(singleStep ? '正在演示下一步…' : '正在逐步解开…');
+    setStatus(withTime(singleStep ? '正在演示下一步…' : '正在逐步解开…'));
     updateControls();
     let step = 0;
     let started = performance.now();
@@ -734,7 +726,7 @@
         pending = requestAnimationFrame(tick);
       } else cancelAnimationFrame(pending);
       playback.paused = !playback.paused;
-      setStatus(playback.paused ? '求解已暂停。' : '正在逐步解开…');
+      setStatus(withTime(playback.paused ? '求解已暂停。' : '正在逐步解开…'));
       updateControls();
     };
     function tick(now) {
@@ -758,7 +750,8 @@
       state = playback.state;
       animation = null;
       suggestion = singleStep ? plan.slice(1) : null;
-      completeMove(before, steps.length, true, singleStep ? '已提示一步，可以继续拖动。' : '');
+      completeMove(before, steps.length, true, withTime(singleStep ? '已提示一步，可以继续拖动。' : ''));
+      if (won && totalTime) setStatus(withTime(''));
     }
     pending = requestAnimationFrame(tick);
   }
