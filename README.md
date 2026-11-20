@@ -20,6 +20,12 @@
 
 直接用现代浏览器打开 `index.html` 可试玩和使用快速求解。要使用自定义题的全局判定，可在项目目录运行 `python -m http.server 8000`，然后访问 [本地棋盘](http://localhost:8000/)。GitHub Pages 等静态托管可以直接运行全局判定，无需安装前端依赖。当前随机题和自定义题草稿保存在当前浏览器。
 
-多条连线同时被禁行区挡住时，快速搜索会根据各线的接触位置和圆之间的通道调整两端，并重新检查周围间距。快速搜索也会探索多个起点，并使用全局几何分析缩小后的活动范围。尚未解开的布局会交给代数求解器。带禁行区的全局判定若超时，界面会显示「尚未确定」并提供「延长判定」。约束推导、完备性证明及测试命令见[自定义题的全局求解](./SOLVER.md)。
+多条连线同时被禁行区挡住时，快速搜索会根据各线的接触位置和圆之间的通道调整两端，并重新检查周围间距。快速搜索也会探索多个起点，并使用全局几何分析缩小后的活动范围。只剩少量冲突时，程序会按冲突的几何深度和持续时间加权，尝试联合调整受牵连的控制组。尚未解开的布局会交给代数求解器。带禁行区的全局判定若超时，界面会显示「尚未确定」并提供「延长判定」。约束推导、完备性证明及测试命令见[自定义题的全局求解](./SOLVER.md)。
 
 `engine.js` 计算节点位置、检测几何冲突并编排求解步骤。`puzzles.js` 生成可解的随机布局，并从 `planarity.js` 取得自定义题的平面嵌入。`game.js` 负责渲染、输入、计时和存档。平面性检测与增广的部分实现改编自 [NetworkX 3.5](https://github.com/networkx/networkx/tree/networkx-3.5)，许可见 [NETWORKX-LICENSE.txt](./NETWORKX-LICENSE.txt)。GitHub Pages 使用 `main` 分支根目录。
+
+## 测试与发布
+
+- `node --test tests/solver.test.js` 运行求解和回放回归测试。
+- `node tests/benchmark-solver.cjs --algebra` 对照测量星盘净距判定。`--breakout` 对照测量截图重建棋盘。
+- 将待发布提交推送到 GitHub 后，运行 `node scripts/package-pagelet.cjs ../jiexian-pagelet`。将生成目录或其内容的 ZIP 交给 Pagelet，ZIP 根目录须包含 `index.html`。包内的 Worker 从该 GitHub 提交读取 WASM 并校验 SHA-256。

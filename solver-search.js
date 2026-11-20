@@ -32,6 +32,10 @@
     if (problem?.status === 'solved' || problem?.status === 'unsat') return problem;
     const state = puzzles.searchDraft(puzzle, current, { candidate, offer, problem: problem?.status === 'ready' ? problem : undefined });
     if (state) return { status: 'solved', state };
+    if (problem?.status === 'ready' && puzzle.obstacles.length) {
+      const refined = globalThis.JiexianSolverBreakout.repair(puzzle, problem, current, candidate, fewest, offer);
+      if (refined) return refined;
+    }
     return problem?.status === 'ready' ? { status: 'ready', problem, candidate } : problem ?? { status: 'local' };
   }
 

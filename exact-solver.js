@@ -29,15 +29,13 @@
   function segmentClear(p, a, b, distance) {
     const ab = vector(b, a);
     const ap = vector(p, a);
-    const length = normSquared(ab);
-    const projection = dot(ap, ab);
+    const bp = vector(p, b);
     const limit = square(real(distance));
-    return or(
-      and(call('<=', projection, '0'), call('>=', normSquared(ap), limit)),
-      and(call('>=', projection, length), call('>=', normSquared(vector(p, b)), limit)),
-      and(call('>', projection, '0'), call('<', projection, length),
-        call('>=', square(cross(ab, ap)), mul(limit, length)))
-    );
+    // Copositivity of the two-endpoint quadratic form. Use the 2D Gram identity
+    // for its determinant, which also covers coincident endpoints without a division.
+    return and(call('>=', normSquared(ap), limit), call('>=', normSquared(bp), limit),
+      or(call('>=', dot(ap, bp), limit),
+        call('>=', square(cross(ab, ap)), mul(limit, normSquared(ab)))));
   }
 
   function sameSide(a, b, c, d) {

@@ -16,6 +16,7 @@ require('../solver-tracks.js');
 require('../solver-regions.js');
 require('../solver-geometry.js');
 require('../exact-solver.js');
+require('../solver-breakout.js');
 
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
@@ -24,6 +25,8 @@ const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
 const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
   require('./repair-fixture.cjs');
+const { portraitDrafts } = require('./portrait-fixture.cjs');
+const { rotorChord } = require('./orbit-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -57,6 +60,19 @@ function checkSolution(level, result) {
     replay[index] = value;
   }
   assert.equal(g.evaluate(level, g.positions(level, replay)).count, 0);
+}
+
+for (const draft of portraitDrafts()) {
+  test(`the ${draft.points.length}-node portrait puzzle solves before Z3`, () => {
+    const level = puzzles.authored(draft);
+    const initial = g.copy(level.initial);
+    assert.ok(g.evaluate(level, level.points).count > 0);
+    const result = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+    checkSolution(level, result);
+    assert.deepEqual(level.initial, initial);
+    const points = g.positions(level, result.state);
+    for (const i of draft.fixed) assert.deepEqual(points[i], draft.points[i]);
+  });
 }
 
 test('global search finds a 0.002-unit rail interval missed by the local search', () => {
@@ -219,6 +235,49 @@ test('a crossing inside one rigid rotor is an immediate contradiction', () => {
   const points = [[250, 150], [350, 250], [350, 150], [250, 250]];
   const level = g.createLevel({ points, edges: [[0, 1], [2, 3]], controls: [g.rotor([0, 1, 2, 3], [300, 200], 0)] });
   assert.equal(prepareExact(level).status, 'unsat');
+});
+
+test('a rigid chord is obstructed on its entire orbit just below tangency', () => {
+  const blocked = rotorChord(g, 26, 1.999999);
+  assert.equal(prepareExact(blocked).status, 'unsat');
+  const tangent = rotorChord(g, 26, 2);
+  assert.notEqual(prepareExact(tangent).status, 'unsat');
+  assert.equal(g.evaluate(tangent, g.positions(tangent, [[Math.PI]])).count, 0);
+  checkSolution(tangent, exact(tangent));
+});
+
+test('all rotations of a chord clear a disk tangent to its inner orbit', () => {
+  const clear = rotorChord(g, 60, 32);
+  assert.equal(prepareExact(clear).status, 'solved');
+  assert.equal(globalThis.JiexianSolverGeometry.analyze(clear).retryParts.length, 0);
+  const blockedAtStart = rotorChord(g, 60, 32.000001);
+  assert.equal(g.evaluate(blockedAtStart, blockedAtStart.points).count, 1);
+  const { parts, retryParts } = globalThis.JiexianSolverGeometry.analyze(blockedAtStart);
+  assert.ok([...parts, ...retryParts].some(({ records }) => records.some(({ kind }) => kind === 'segment')));
+  checkSolution(blockedAtStart, exact(blockedAtStart));
+});
+
+test('the Gram segment predicate handles both types of tangency and zero-length segments', () => {
+  const level = g.createLevel({ points: [], edges: [], controls: [] });
+  const cases = [
+    [[-3, -4], [3, -4], 4, 'solved'],
+    [[-3, -4], [3, -4], 4.000001, 'unsat'],
+    [[-4, 0], [-6, 2], 4, 'solved'],
+    [[-4, 0], [-6, 2], 4.000001, 'unsat'],
+    [[4, 0], [4, 0], 4, 'solved'],
+    [[4, 0], [4, 0], 4.000001, 'unsat'],
+  ];
+  for (const [a, b, distance, expected] of cases) {
+    const context = init();
+    try {
+      const part = { controls: [], records: [{ kind: 'segment', vertices: [0, 1, 2], distance, support: [] }] };
+      const problem = { status: 'ready', coordinates: [a, b, [0, 0]],
+        railBounds: [], parts: [part], retryParts: [], state: [] };
+      assert.equal(solveExact(level, (command) => ask(context, command), problem).status, expected);
+    } finally {
+      destroy(context);
+    }
+  }
 });
 
 function coveredRotor(remove = -1) {

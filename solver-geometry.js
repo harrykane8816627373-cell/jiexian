@@ -13,6 +13,34 @@
   const norm = (v) => dot(v, v);
   const opposite = (a, b) => a < 0n && b > 0n || a > 0n && b < 0n;
 
+  function segmentDistanceSquared(point, a, b) {
+    const ab = vector(b, a), ap = vector(point, a);
+    const projection = dot(ap, ab);
+    if (projection <= 0n) return [norm(ap), 1n];
+    const length = norm(ab);
+    if (projection >= length) return [norm(vector(point, b)), 1n];
+    return [square(cross(ab, ap)), length];
+  }
+
+  function compareSumOfRoots(a, b, squaredLimit) {
+    const gap = squaredLimit - a - b;
+    if (gap < 0n) return 1;
+    const difference = 4n * a * b - square(gap);
+    return difference > 0n ? 1 : difference < 0n ? -1 : 0;
+  }
+
+  function orbitClear(center, point, a, b, distance) {
+    const [near, denominator] = segmentDistanceSquared(center, a, b);
+    const far = max(norm(vector(a, center)), norm(vector(b, center))) * denominator;
+    const radius = norm(vector(point, center)) * denominator;
+    const limit = square(distance) * denominator;
+    // Rotating the whole segment fills an annulus. Its farthest closest-point
+    // distance from the probe equals the probe radius plus the inner radius.
+    if (compareSumOfRoots(radius, near, limit) < 0) return -1;
+    if (compareSumOfRoots(radius, limit, near) <= 0 || compareSumOfRoots(far, limit, radius) <= 0) return 1;
+    return 0;
+  }
+
   function scaledDecimals(values) {
     // Interpret the same shortest decimals used by the exact SMT model.
     const entries = [...new Set(values)].map((value) => {
@@ -59,18 +87,14 @@
   function constantClear(kind, vertices, distance) {
     const [a, b, p, q] = vertices;
     if (kind === 'distance') return norm(vector(a, b)) >= square(distance);
-    const ab = vector(b, a);
-    const ap = vector(p, a);
     if (kind === 'crossing') {
+      const ab = vector(b, a), ap = vector(p, a);
       const pq = vector(q, p);
       return !opposite(cross(ab, ap), cross(ab, vector(q, a))) ||
         !opposite(cross(pq, vector(a, p)), cross(pq, vector(b, p)));
     }
-    const projection = dot(ap, ab);
-    if (projection <= 0n) return norm(ap) >= square(distance);
-    const length = norm(ab);
-    if (projection >= length) return norm(vector(p, b)) >= square(distance);
-    return square(cross(ab, ap)) >= square(distance) * length;
+    const [numerator, denominator] = segmentDistanceSquared(p, a, b);
+    return numerator >= square(distance) * denominator;
   }
 
   function components(records, count) {
@@ -157,6 +181,7 @@
     const boxes = motionBoxes(level, points, rails, units);
     if (boxes.some((box) => box.some(([lo, hi]) => lo > hi))) return { unsat: true };
     const edgeBoxes = level.edges.map(([a, b]) => boxUnion(boxes[a], boxes[b]));
+    const rotorCenters = level.controls.map(({ kind, center }) => kind === 'rotor' ? center.map(units) : null);
     const records = [];
     let unsat = false;
     function include(kind, vertices, lhs, rhs, distance) {
@@ -169,6 +194,19 @@
       if (!support.length || rigid) {
         if (!constantClear(kind, vertices.map((i) => points[i]), d)) unsat = true;
         return;
+      }
+      const rotor = support.length === 1 && rotorCenters[support[0]];
+      if (rotor) {
+        const [a, b, c] = vertices;
+        let clear = 0;
+        if (kind === 'distance' && (owners[a] === -1 || owners[b] === -1)) {
+          const [moving, fixed] = owners[a] === -1 ? [b, a] : [a, b];
+          clear = orbitClear(rotor, points[fixed], points[moving], points[moving], d);
+        } else if (kind === 'segment' && owners[a] === owners[b] && owners[c] === -1) {
+          clear = orbitClear(rotor, points[c], points[a], points[b], d);
+        }
+        if (clear === -1) unsat = true;
+        if (clear) return;
       }
       records.push({ kind, vertices, distance, support });
     }

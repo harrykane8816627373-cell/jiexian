@@ -5,6 +5,8 @@ const { runInNewContext, runInThisContext } = require('node:vm');
 const { gunzipSync } = require('node:zlib');
 const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
   require('./repair-fixture.cjs');
+const { portraitDrafts } = require('./portrait-fixture.cjs');
+const { rotorChord } = require('./orbit-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
 const parallel = process.argv.includes('--parallel');
@@ -15,10 +17,13 @@ const coupledCase = process.argv.includes('--coupled-repair');
 const hybridCase = process.argv.includes('--hybrid');
 const contactCase = process.argv.includes('--contacts');
 const corridorCase = process.argv.includes('--corridors');
-const fullComparison = contactCase || corridorCase;
-const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || fullComparison;
+const breakoutCase = process.argv.includes('--breakout');
+const algebraCase = process.argv.includes('--algebra');
+const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase;
+const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' : hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
+const revision = breakoutCase || algebraCase ? '6b0f5b4' : corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
+  hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
   obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
 const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
 const historicalProcess = fullComparison && args[1] === 'before';
@@ -27,10 +32,11 @@ for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-
   'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   // Use the same V8 realm in the two isolated subprocesses for the full-pipeline comparison.
   if (!historicalProcess) require(path.join(repo, name));
-  else if (name !== 'solver-obstacle-corridors.js' && (!contactCase || name !== 'solver-contact-repair.js')) {
+  else if ((breakoutCase || algebraCase || name !== 'solver-obstacle-corridors.js') && (!contactCase || name !== 'solver-contact-repair.js')) {
     runInThisContext(oldScript(name), { filename: name });
   }
 }
+if (!historicalProcess) require('../solver-breakout.js');
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const current = globalThis.JiexianExact;
@@ -200,7 +206,12 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = corridorCase ? [
+const cases = algebraCase ? [
+  ['rotating chord blocked one millionth below tangency', rotorChord(g, 26, 1.999999), 9],
+  ['rotating chord tangent at its only feasible angle', rotorChord(g, 26, 2), 9],
+  ['rotating chord clear at every angle', rotorChord(g, 60, 32), 9],
+] : breakoutCase ? portraitDrafts().map((draft) =>
+  [`${draft.points.length}-node portrait screenshot reconstruction`, puzzles.authored(draft), 5, 1]) : corridorCase ? [
   ['27-node screenshot with two long edges blocked by different disks', puzzles.authored(corridorScreenshotDraft()), 9, 1],
 ] : contactCase ? [
   ['27-node screenshot with eight disks and six blocked contacts', puzzles.authored(contactScreenshotDraft()), 9],
