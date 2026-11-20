@@ -4,6 +4,7 @@
   const g = globalThis.Jiexian;
   const board = [[g.margin, g.width - g.margin], [g.margin, g.height - g.margin]];
   const angles = [0, Math.PI / 12, -Math.PI / 12, Math.PI / 6, -Math.PI / 6, Math.PI / 2];
+  const bandAngles = Array.from({ length: 16 }, (_, i) => i * Math.PI / 8);
   const neighborDirections = [0, Math.PI / 7, -Math.PI / 7].map((angle) => [Math.cos(angle), Math.sin(angle)]);
 
   function side(a, b, p, q, vertices) {
@@ -23,7 +24,7 @@
       terms: [[i, t - 1], [j, -t], [first ? k : l, 1]] };
   }
 
-  function residuals(records, points, add) {
+  function residuals(records, points, add, limit = Infinity) {
     let cost = 0;
     const retain = (deficit, normal, terms) => {
       if (deficit <= 0) return;
@@ -63,6 +64,7 @@
         const { gap, normal, terms } = first.gap >= second.gap ? first : second;
         retain(.08 - gap, normal, terms);
       }
+      if (cost >= limit) break;
     }
     return cost;
   }
@@ -212,25 +214,88 @@
     return seeds;
   }
 
-  function seed(drawing, angle, reverse) {
+  function orientDrawing(drawing, angle, reflect = false) {
     const c = Math.cos(angle), s = Math.sin(angle);
-    const rotated = drawing.map(([x, y]) => [x * c - y * s, x * s + y * c]);
+    return drawing.map(([x, y]) => {
+      const u = reflect ? -x : x;
+      return [u * c - y * s, u * s + y * c];
+    });
+  }
+
+  function drawingBounds(drawing) {
+    return board.map((_, axis) => {
+      const values = drawing.map((point) => point[axis]);
+      return [Math.min(...values), Math.max(...values)];
+    });
+  }
+
+  function fitDrawing(drawing, extent, bounds) {
+    return drawing.map((point) => point.map((value, axis) => {
+      const [a, b] = extent[axis], [lo, hi] = bounds[axis];
+      if (a === b) return (lo + hi) / 2;
+      return value === b ? hi : lo + (hi - lo) * (value - a) / (b - a);
+    }));
+  }
+
+  function seed(drawing, angle, reverse) {
+    const rotated = orientDrawing(drawing, angle);
     const bounds = board.map(([lo, hi], axis) => {
       const width = hi - lo;
       const [start, end] = axis ? [.445, .995] : [.04, .91];
       return reverse ? [hi - width * end, hi - width * start] : [lo + width * start, lo + width * end];
     });
-    const normalized = bounds.map((_, axis) => {
-      const values = rotated.map((point) => point[axis]);
-      return [Math.min(...values), Math.max(...values)];
-    });
-    return rotated.map((point) => point.map((value, axis) => {
-      const [a, b] = normalized[axis], [lo, hi] = bounds[axis];
-      return a === b ? (lo + hi) / 2 : lo + (hi - lo) * (value - a) / (b - a);
-    }));
+    return fitDrawing(rotated, drawingBounds(rotated), bounds);
   }
 
-  function repair(level, problem, { starts = [], reembed = true, restarts = 36, offer } = {}) {
+  function boundaryWindows(level) {
+    const minimumSpan = 2 * g.clearances(level).nodes;
+    const windows = [board];
+    for (const [axis, [lo, hi]] of board.entries()) {
+      const span = hi - lo;
+      for (const direction of [-1, 1]) {
+        const reach = ({ center, r }) => direction * center[axis] + r;
+        const { center, r } = level.obstacles.reduce((a, b) => reach(a) >= reach(b) ? a : b);
+        const cuts = [lo + .25 * span, lo + .5 * span, lo + .75 * span, center[axis], center[axis] - direction * .75 * r];
+        for (const cut of new Set(cuts)) {
+          const interval = direction < 0 ? [lo, cut] : [cut, hi];
+          const width = interval[1] - interval[0];
+          if (width < minimumSpan || width > .8 * span) continue;
+          windows.push(axis === 0 ? [interval, board[1]] : [board[0], interval]);
+        }
+      }
+    }
+    return windows;
+  }
+
+  function boundarySeeds(level, drawings, records, obstacles) {
+    // Invertible affine placement preserves crossings. Rank templates by clearance,
+    // then restore every constraint during refinement and final validation.
+    const distanceRecords = records.filter(({ kind }) => kind !== 'cross');
+    const windows = boundaryWindows(level);
+    const starts = [];
+    for (const drawing of drawings.slice(0, 5)) {
+      const orientations = bandAngles.flatMap((angle) => [false, true].map((reflect) => {
+        const points = orientDrawing(drawing, angle, reflect);
+        return { points, extent: drawingBounds(points) };
+      }));
+      for (const window of windows) {
+        const ranked = [];
+        for (const { points, extent } of orientations) {
+          const placed = fitDrawing(points, extent, window);
+          const limit = ranked[3]?.cost ?? Infinity;
+          const cost = residuals(distanceRecords, [...placed, ...obstacles], undefined, limit);
+          if (cost >= limit) continue;
+          ranked.push({ points: placed, cost });
+          ranked.sort((a, b) => a.cost - b.cost);
+          if (ranked.length > 4) ranked.pop();
+        }
+        starts.push(...ranked);
+      }
+    }
+    return starts.sort((a, b) => a.cost - b.cost).slice(0, 32);
+  }
+
+  function repair(level, problem, { starts = [], reembed = true, useBoundaryBands = false, restarts = 36, offer } = {}) {
     if (level.controls.length !== level.points.length || level.controls.some(({ kind }) => kind !== 'free')) return null;
     const records = [...problem.parts, ...problem.retryParts].flatMap(({ records }) => records);
     const obstacles = problem.coordinates.slice(level.points.length);
@@ -248,6 +313,16 @@
       if (!initial) {
         initial = start;
         partial = result.points;
+      }
+    }
+    let drawings;
+    if (useBoundaryBands && level.obstacles.length) {
+      drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
+      if (drawings?.length) {
+        for (const { points } of boundarySeeds(level, drawings, records, obstacles)) {
+          const result = trySeed(points);
+          if (!result.count) return { status: 'solved', state: stateOf(result.points) };
+        }
       }
     }
     if (initial && restarts) {
@@ -270,7 +345,7 @@
       }
     }
     if (!reembed) return null;
-    const drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
+    drawings ??= globalThis.JiexianDrawing(level.points.length, level.edges);
     if (!drawings?.length) return null;
     const seeds = angles.flatMap((angle) => drawings.slice(0, 8).flatMap((drawing) =>
       [false, true].map((reverse) => seed(drawing, angle, reverse))));

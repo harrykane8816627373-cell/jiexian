@@ -30,7 +30,7 @@ const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
-const { obstacleClusterScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
+const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts } = require('./obstacle-cluster-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -152,6 +152,19 @@ test('a zero-distance obstacle on each horizontal edge admits a normal correctio
   const result = globalThis.JiexianSolverRelaxation.repair(level, problem, { starts: [level.initial], reembed: false });
   checkSolution(level, result);
   assert.deepEqual(result.state[4], level.initial[4]);
+});
+
+test('both reconstructions with six maximum-radius disks solve before Z3', () => {
+  const drafts = maxObstacleClusterDrafts();
+  const mirrored = drafts.map((draft) => ({
+    ...draft, points: draft.points.map(([x, y]) => [g.width - x, y]),
+    obstacles: draft.obstacles.map(({ center: [x, y], r }) => ({ center: [g.width - x, y], r })),
+  }));
+  for (const draft of [...drafts, ...mirrored]) {
+    const level = puzzles.authored(draft);
+    assert.ok(g.evaluate(level, level.points).count >= 10);
+    checkSolution(level, globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact));
+  }
 });
 
 test('global search finds a 0.002-unit rail interval missed by the local search', () => {

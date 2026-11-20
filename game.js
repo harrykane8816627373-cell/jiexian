@@ -635,7 +635,7 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=17');
+      job.worker = new Worker('./solver-worker.js?v=18');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current });

@@ -9,7 +9,7 @@ const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
-const { obstacleClusterScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
+const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts } = require('./obstacle-cluster-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
 const parallel = process.argv.includes('--parallel');
@@ -27,12 +27,13 @@ const blockCase = process.argv.includes('--block');
 const crossingCase = process.argv.includes('--crossing');
 const crossingClearance = process.argv.includes('--crossing-clearance');
 const obstacleClusterCase = process.argv.includes('--obstacle-cluster');
-const relaxationCase = crossingCase || crossingClearance || obstacleClusterCase;
+const maxObstacleCase = process.argv.includes('--max-obstacles');
+const relaxationCase = crossingCase || crossingClearance || obstacleClusterCase || maxObstacleCase;
 const seededExact = neighborhoodCase || blockCase;
 const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || seededExact || relaxationCase;
 const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase || relaxationCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = obstacleClusterCase ? '36b9e4a' : crossingClearance ? '95360f0' :
+const revision = maxObstacleCase ? 'f68bb5d' : obstacleClusterCase ? '36b9e4a' : crossingClearance ? '95360f0' :
   crossingCase ? '9f482e2' : blockCase ? '818a382' :
   neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
   corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
@@ -227,7 +228,9 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = obstacleClusterCase ? [
+const cases = maxObstacleCase ? maxObstacleClusterDrafts().map((draft, i) =>
+  [i ? 'New screenshot with six maximum-radius circles' : 'Previous screenshot with all six radii maximized',
+    puzzles.authored(draft), 7, 1]) : obstacleClusterCase ? [
   ['27-node screenshot with six forbidden circles', puzzles.authored(obstacleClusterScreenshotDraft()), 9, 1],
 ] : crossingClearance ? [
   ['21-node screenshot with a crossing and node-edge clearance conflict', puzzles.authored(crossingAndClearanceScreenshotDraft()), 7, 1],

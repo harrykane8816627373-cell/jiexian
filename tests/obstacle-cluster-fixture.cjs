@@ -1,18 +1,35 @@
-// Pixel reconstruction of the 27-node screenshot with six forbidden circles.
-function obstacleClusterScreenshotDraft() {
+function fromPixels([left, top], pixels, circles) {
   const scale = 1090 / 852;
-  const world = ([x, y]) => [24 + (x - 148.5) / scale, 24 + (y - 175.5) / scale];
-  const points = [[1216, 434], [731, 782], [812, 718], [1024, 304], [1100, 200], [1001, 438], [642, 741], [546, 660],
-    [937, 519], [1125, 487], [1091, 362], [939, 782], [866, 708], [564, 782], [1110, 782], [1216, 706], [927, 705],
-    [1195, 581], [950, 204], [1176, 521], [742, 198], [748, 276], [656, 198], [742, 385], [699, 198], [1090, 436],
-    [1150, 415]].map(world).map(([x, y]) => [Math.max(42, Math.min(858, x)), Math.max(42, Math.min(498, y))]);
+  const world = ([x, y]) => [24 + (x - left) / scale, 24 + (y - top) / scale];
+  const points = pixels.map(world).map(([x, y]) => [Math.max(42, Math.min(858, x)), Math.max(42, Math.min(498, y))]);
   const edges = [[23, 25], [25, 21], [21, 19], [19, 22], [19, 4], [4, 5], [4, 3], [23, 24], [24, 8], [8, 3],
     [8, 14], [14, 7], [7, 2], [2, 12], [12, 13], [13, 3], [13, 17], [13, 15], [17, 15], [13, 6], [6, 18],
     [18, 15], [15, 16], [16, 1], [1, 5], [5, 11], [5, 9], [11, 6], [6, 9], [9, 3], [6, 26], [26, 27], [27, 1],
     [1, 10], [6, 10], [10, 20]].map(([a, b]) => [Math.min(a, b) - 1, Math.max(a, b) - 1]);
-  const obstacles = [[385.2, 402.9, 123], [601.4, 338.9, 103.5], [391.9, 686.3, 123], [754.8, 578.1, 102],
-    [894.9, 398.1, 87.3], [1045.2, 622.3, 119.9]].map(([x, y, r]) => ({ center: world([x, y]), r: Math.min(96, r / scale) }));
+  const obstacles = circles.map(([x, y, r]) => ({ center: world([x, y]), r: Math.min(96, r / scale) }));
   return { points, edges, obstacles };
 }
 
-module.exports = { obstacleClusterScreenshotDraft };
+// Pixel reconstructions of the 27-node board before and after enlarging the circles.
+function obstacleClusterScreenshotDraft() {
+  return fromPixels([148.5, 175.5],
+    [[1216, 434], [731, 782], [812, 718], [1024, 304], [1100, 200], [1001, 438], [642, 741], [546, 660],
+      [937, 519], [1125, 487], [1091, 362], [939, 782], [866, 708], [564, 782], [1110, 782], [1216, 706], [927, 705],
+      [1195, 581], [950, 204], [1176, 521], [742, 198], [748, 276], [656, 198], [742, 385], [699, 198], [1090, 436],
+      [1150, 415]],
+    [[385.2, 402.9, 123], [601.4, 338.9, 103.5], [391.9, 686.3, 123], [754.8, 578.1, 102],
+      [894.9, 398.1, 87.3], [1045.2, 622.3, 119.9]]);
+}
+
+function maxObstacleClusterDrafts() {
+  const large = fromPixels([144.5, 178.5],
+    [[1212, 407], [726, 785], [786, 721], [1053, 326], [1143, 251], [1047, 412], [638, 744], [542, 663], [1008, 429],
+      [1139, 475], [1128, 324], [832, 785], [825, 704], [560, 785], [1103, 775], [1212, 709], [920, 785], [1191, 622],
+      [946, 207], [1172, 524], [799, 201], [790, 279], [652, 201], [738, 388], [726, 232], [1115, 417], [1146, 377]],
+    [[368, 435, 123], [597.1, 342.3, 123], [387.9, 689.5, 123], [733.6, 600, 123], [891.1, 401.7, 123], [1041.2, 625.9, 123]]);
+  return [obstacleClusterScreenshotDraft(), large].map((draft) => ({
+    ...draft, obstacles: draft.obstacles.map(({ center }) => ({ center, r: 96 })),
+  }));
+}
+
+module.exports = { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts };
