@@ -28,13 +28,14 @@ const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
 const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
   require('./repair-fixture.cjs');
-const { portraitDrafts, pinnedObstaclePortraitDraft } = require('./portrait-fixture.cjs');
+const { portraitDrafts, pinnedObstaclePortraitDraft, blockedPortraitDraft } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
 const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft, lengthScreenshotDraft,
   lengthScreenshotWrappedLayout, eightDiskScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 const { eightDiskCorridorDraft } = require('./eight-corridor-fixture.cjs');
+const { node19Draft } = require('./node19-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -256,6 +257,39 @@ test('two attachment edges allow a crossed section to be reembedded in an eight-
     assert.equal(result.preserveRepair, true);
   }
 });
+
+test('adding a wire to node 19 can reembed the drawing between two banks of obstacles', async (t) => {
+  const draft = node19Draft();
+  const base = puzzles.authored(draft);
+  assert.equal(g.evaluate(base, base.points).count, 0);
+  assert.equal(puzzles.solveDraft({ ...draft, edges: [...draft.edges, [3, 18]] }).puzzle, undefined);
+
+  for (const target of [2, 10, 12, 13, 22, 24, 26]) {
+    await t.test(`wire 19–${target}`, () => {
+      const edge = [Math.min(19, target) - 1, Math.max(19, target) - 1];
+      const { puzzle } = puzzles.solveDraft({ ...draft, edges: [...draft.edges, edge] });
+      assert.ok(puzzle);
+      assert.ok(g.evaluate(puzzle, puzzle.points).count > 0);
+      const result = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+      checkSolution(puzzle, result);
+    });
+  }
+});
+
+for (const target of [27, 29]) {
+  test(`blocked wire 6–${target} can fit the portrait drawing along a wall`, () => {
+    const { puzzle } = puzzles.solveDraft(blockedPortraitDraft(target));
+    assert.ok(puzzle);
+    let blocked = false;
+    g.evaluate(puzzle, puzzle.points, (nodes, kind) => {
+      if (kind === 'edge-obstacle' && nodes.includes(5) && nodes.includes(target - 1)) blocked = true;
+    });
+    assert.ok(blocked);
+    const result = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+    checkSolution(puzzle, result);
+    assert.ok(g.totalLength(puzzle, g.positions(puzzle, result.state)) < g.totalLength(puzzle, puzzle.points));
+  });
+}
 
 test('feasibility and length search share compact placements with a fixed node', () => {
   const level = puzzles.authored(pinnedObstaclePortraitDraft());

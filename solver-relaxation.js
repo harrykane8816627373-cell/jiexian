@@ -388,6 +388,89 @@
     return starts.sort((a, b) => a.cost - b.cost).slice(0, 32);
   }
 
+  function interiorBands(level) {
+    const { nodes, spacing, obstacleGap } = g.clearances(level);
+    const bands = [];
+    for (const [axis, [low, high]] of board.entries()) {
+      const circles = [...level.obstacles].sort((a, b) => a.center[axis] - b.center[axis]);
+      const upper = ({ center, r }) => center[axis] + r + spacing + obstacleGap;
+      const lower = ({ center, r }) => center[axis] - r - spacing - obstacleGap;
+      // Start from a straight strip between two banks. Wider seed frames also
+      // reach the bays between circles, where the numerical repair can fan out.
+      for (let i = 2; i <= circles.length - 2; i++) {
+        const from = Math.max(low, ...circles.slice(0, i).map(upper));
+        const to = Math.min(high, ...circles.slice(i).map(lower));
+        if (to - from < .6 * nodes) continue;
+        const mid = (from + to) / 2;
+        for (const offset of [0, -.6, .6]) {
+          const center = mid + offset * nodes;
+          for (const width of [2.42, 3.03, 3.79, 4.67, 5.67, 7.18]) {
+            const reach = width * nodes / 2;
+            const strip = [Math.max(low, center - reach), Math.min(high, center + reach)];
+            bands.push(axis === 0 ? [strip, board[1]] : [board[0], strip]);
+          }
+        }
+      }
+    }
+    return bands;
+  }
+
+  function wallFrames(level) {
+    const { nodes } = g.clearances(level);
+    const frames = [];
+    for (const [axis, [lo, hi]] of board.entries()) {
+      const [start, end] = board[1 - axis];
+      for (const span of [5, 6, 7, 8, 9, 10]) {
+        const thickness = span * nodes;
+        if (thickness > hi - lo) continue;
+        for (const strip of [[lo, lo + thickness], [hi - thickness, hi]]) {
+          const crossSections = [[start, end]];
+          for (const trim of [.8 * nodes, 1.6 * nodes]) {
+            crossSections.push([start + trim, end], [start, end - trim]);
+          }
+          for (const section of crossSections) frames.push(axis === 0 ? [strip, section] : [section, strip]);
+        }
+      }
+    }
+    return frames;
+  }
+
+  function bandSeeds(drawings, frames, records, obstacles) {
+    const starts = [];
+    for (const drawing of drawings) {
+      const ranked = [];
+      for (const angle of bandAngles) {
+        for (const reflected of [false, true]) {
+          const shape = orientDrawing(drawing, angle, reflected);
+          const extent = drawingBounds(shape);
+          for (const frame of frames) {
+            const points = fitDrawing(shape, extent, frame);
+            const limit = ranked[7]?.cost ?? Infinity;
+            const cost = residuals(records, [...points, ...obstacles], undefined, limit);
+            if (cost >= limit) continue;
+            ranked.push({ points, cost });
+            ranked.sort((a, b) => a.cost - b.cost);
+            if (ranked.length > 8) ranked.pop();
+          }
+        }
+      }
+      starts.push(...ranked);
+    }
+    return starts.sort((a, b) => a.cost - b.cost).slice(0, 48);
+  }
+
+  function repairBand(level, drawings, frames, records, obstacles, rankingRecords = records) {
+    if (!frames.length || !drawings?.length) return null;
+    for (const { points } of bandSeeds(drawings, frames, rankingRecords, obstacles)) {
+      const result = improve(level, records, obstacles, points, 150);
+      if (result.count) continue;
+      let best = result.points;
+      polishLength(level, records, obstacles, best, (candidate) => { best = candidate; });
+      return best;
+    }
+    return null;
+  }
+
   function repair(level, problem, { starts = [], reembed = true, useBoundaryBands = false, restarts = 36, offer } = {}) {
     if (level.controls.length !== level.points.length || level.controls.some(({ kind }) => kind !== 'free')) return null;
     const records = [...problem.parts, ...problem.retryParts].flatMap(({ records }) => records);
@@ -606,6 +689,15 @@
     if (tryPlacements(floating)) return;
 
     if (!best && !anchors.length) {
+      const bands = interiorBands(level);
+      const corridor = repairBand(level, drawings, bands, records, obstacles);
+      if (corridor && consider(corridor)) return;
+      if (!bands.length && level.obstacles.length >= 4) {
+        // A longer layout can reach along an outside wall when the interior is crowded.
+        const distanceRecords = records.filter(({ kind }) => kind !== 'crossing');
+        const alongWall = repairBand(level, drawings, wallFrames(level), records, obstacles, distanceRecords);
+        if (alongWall && consider(alongWall)) return;
+      }
       // If the first aspect ratio jams, restore clearances before shortening.
       // Preserve the original drawing as one start and try wider and taller fits.
       const frames = [null, [[90, 810], [96, 444]], [compactFrame[0], board[1]], [[170, 730], board[1]]];
