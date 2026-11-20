@@ -2,7 +2,7 @@
 
 一款空间益智小游戏。拖动红色节点，把虚线理成实线。
 
-[在线试玩](https://harrykane8816627373-cell.github.io/jiexian/)
+[在线试玩](https://jiexian.pagelet.host/)
 
 ## 玩法
 
