@@ -299,5 +299,5 @@
     return { ...result, coordinates, railBounds, parts: region.parts, retryParts: [...result.retryParts, ...region.retry] };
   }
 
-  globalThis.JiexianSolverGeometry = { analyze };
+  globalThis.JiexianSolverGeometry = { analyze, components };
 })();

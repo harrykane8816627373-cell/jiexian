@@ -18,22 +18,29 @@
     };
     const coupled = globalThis.JiexianCoupledRepair.repair;
     const sweep = globalThis.JiexianRepair.repair;
-    const reembed = prepare && puzzle.obstacles.length && initial.some(({ kind }) => kind === 'crossing') &&
+    const freeObstacleLayout = prepare && puzzle.obstacles.length &&
       puzzle.controls.length === puzzle.points.length && puzzle.controls.every(({ kind }) => kind === 'free');
+    const reembed = freeObstacleLayout && initial.some(({ kind }) => kind === 'crossing');
+    const relaxContacts = freeObstacleLayout && initial.filter(({ kind }) => kind === 'edge-obstacle').length >= 2;
     const relieved = globalThis.JiexianContactRepair.repair(puzzle, current, { initial, offer });
     const repaired = relieved ??
       (candidate !== current && fewest === 1 ? sweep(puzzle, candidate, { depthLimit: 1 }) : null) ??
       globalThis.JiexianObstacleCorridors.repair(puzzle, current, initial, offer) ??
       coupled(puzzle, current, { offer }) ??
-      coupled(puzzle, current, { mixed: true, offer }) ??
-      (reembed ? null : sweep(puzzle, current));
+      (relaxContacts ? null : coupled(puzzle, current, { mixed: true, offer })) ??
+      (reembed || relaxContacts ? null : sweep(puzzle, current));
     if (repaired) return repaired;
     const obstacleLayout = puzzles.searchObstacles(puzzle, current);
     if (obstacleLayout) return { status: 'solved', state: obstacleLayout };
     const problem = prepare?.(puzzle, current);
     if (problem?.status === 'solved' || problem?.status === 'unsat') return problem;
-    if (reembed) {
-      const rearranged = (problem?.status === 'ready' ? globalThis.JiexianSolverRelaxation.repair(puzzle, problem) : null) ??
+    const relax = globalThis.JiexianSolverRelaxation?.repair;
+    const previousSeed = candidate;
+    if (reembed || relaxContacts) {
+      const starts = relaxContacts ? [current, candidate] : [];
+      const rearranged = (problem?.status === 'ready' ?
+        relax(puzzle, problem, { starts, reembed, offer }) : null) ??
+        (relaxContacts ? coupled(puzzle, current, { mixed: true, offer }) : null) ??
         sweep(puzzle, current);
       if (rearranged) return rearranged;
     }
@@ -42,6 +49,10 @@
     if (problem?.status === 'ready' && puzzle.obstacles.length) {
       const refined = globalThis.JiexianSolverBreakout.repair(puzzle, problem, current, candidate, fewest, offer);
       if (refined) return refined;
+      if (relaxContacts && candidate !== current && candidate !== previousSeed && fewest <= 3) {
+        const polished = relax(puzzle, problem, { starts: [candidate], reembed: false, restarts: 12, offer });
+        if (polished) return polished;
+      }
     }
     return problem?.status === 'ready' ? { status: 'ready', problem, candidate } : problem ?? { status: 'local' };
   }

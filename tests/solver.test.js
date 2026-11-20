@@ -30,6 +30,7 @@ const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
+const { obstacleClusterScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -121,6 +122,36 @@ test('global reembedding accepts changes to the obstacle geometry and vertex ord
     assert.ok(g.evaluate(level, level.points).count > 0);
     checkSolution(level, globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact));
   }
+});
+
+test('blocked edges with shared endpoints on a six-circle board solve before Z3', () => {
+  const draft = obstacleClusterScreenshotDraft();
+  const level = puzzles.authored(draft);
+  const kinds = [];
+  g.evaluate(level, level.points, (_, kind) => kinds.push(kind));
+  assert.equal(kinds.filter((kind) => kind === 'edge-obstacle').length, 6);
+  assert.equal(kinds.filter((kind) => kind === 'node-edge').length, 2);
+  for (const shift of [0, -2, 3]) {
+    const changed = puzzles.authored({ ...draft, obstacles: draft.obstacles.map(({ center: [x, y], r }, i) => ({
+      center: [x + (i % 2 ? shift : -shift), y - shift], r: r + shift / 2,
+    })) });
+    const result = globalThis.JiexianSolverSearch.search(changed, changed.initial, prepareExact);
+    checkSolution(changed, result);
+    const end = g.positions(changed, result.state);
+    assert.deepEqual(end[6], draft.points[6]);
+  }
+});
+
+test('a zero-distance obstacle on each horizontal edge admits a normal correction in separate blocks', () => {
+  const level = puzzles.authored({
+    points: [[120, 200], [400, 200], [500, 370], [780, 370], [50, 450]],
+    edges: [[0, 1], [2, 3]], obstacles: [{ center: [260, 200], r: 60 }, { center: [640, 370], r: 60 }],
+  });
+  const problem = prepareExact(level);
+  assert.equal(problem.status, 'ready');
+  const result = globalThis.JiexianSolverRelaxation.repair(level, problem, { starts: [level.initial], reembed: false });
+  checkSolution(level, result);
+  assert.deepEqual(result.state[4], level.initial[4]);
 });
 
 test('global search finds a 0.002-unit rail interval missed by the local search', () => {

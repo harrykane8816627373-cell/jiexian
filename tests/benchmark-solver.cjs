@@ -9,6 +9,7 @@ const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
+const { obstacleClusterScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
 const parallel = process.argv.includes('--parallel');
@@ -25,12 +26,14 @@ const neighborhoodCase = process.argv.includes('--neighborhood');
 const blockCase = process.argv.includes('--block');
 const crossingCase = process.argv.includes('--crossing');
 const crossingClearance = process.argv.includes('--crossing-clearance');
+const obstacleClusterCase = process.argv.includes('--obstacle-cluster');
+const relaxationCase = crossingCase || crossingClearance || obstacleClusterCase;
 const seededExact = neighborhoodCase || blockCase;
-const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || seededExact || crossingCase || crossingClearance;
-const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase ||
-  crossingCase || crossingClearance;
+const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || seededExact || relaxationCase;
+const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase || relaxationCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = crossingClearance ? '95360f0' : crossingCase ? '9f482e2' : blockCase ? '818a382' :
+const revision = obstacleClusterCase ? '36b9e4a' : crossingClearance ? '95360f0' :
+  crossingCase ? '9f482e2' : blockCase ? '818a382' :
   neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
   corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
   hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
@@ -42,7 +45,7 @@ for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-
   'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   // Use the same V8 realm in the two isolated subprocesses for the full-pipeline comparison.
   if (!historicalProcess || seededExact && name !== 'exact-solver.js') require(path.join(repo, name));
-  else if ((breakoutCase || algebraCase || crossingCase || crossingClearance || name !== 'solver-obstacle-corridors.js') &&
+  else if ((breakoutCase || algebraCase || relaxationCase || name !== 'solver-obstacle-corridors.js') &&
       (!contactCase || name !== 'solver-contact-repair.js')) {
     runInThisContext(oldScript(name), { filename: name });
   }
@@ -50,9 +53,9 @@ for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-
 if (!historicalProcess) {
   require('../solver-breakout.js');
   require('../solver-relaxation.js');
-} else if (crossingCase || crossingClearance) {
+} else if (relaxationCase) {
   runInThisContext(oldScript('solver-breakout.js'), { filename: 'solver-breakout.js' });
-  if (crossingClearance) runInThisContext(oldScript('solver-relaxation.js'), { filename: 'solver-relaxation.js' });
+  if (!crossingCase) runInThisContext(oldScript('solver-relaxation.js'), { filename: 'solver-relaxation.js' });
 }
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
@@ -224,7 +227,9 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = crossingClearance ? [
+const cases = obstacleClusterCase ? [
+  ['27-node screenshot with six forbidden circles', puzzles.authored(obstacleClusterScreenshotDraft()), 9, 1],
+] : crossingClearance ? [
   ['21-node screenshot with a crossing and node-edge clearance conflict', puzzles.authored(crossingAndClearanceScreenshotDraft()), 7, 1],
 ] : crossingCase ? [
   ['21-node screenshot with only one crossed pair', puzzles.authored(crossingScreenshotDraft()), 7, 1],

@@ -2,27 +2,24 @@
   'use strict';
 
   const g = globalThis.Jiexian;
-  const difference = ([x, y], [u, v]) => [x - u, y - v];
-  const dot = ([x, y], [u, v]) => x * u + y * v;
   const board = [[g.margin, g.width - g.margin], [g.margin, g.height - g.margin]];
   const angles = [0, Math.PI / 12, -Math.PI / 12, Math.PI / 6, -Math.PI / 6, Math.PI / 2];
-
-  function direction(a, b) {
-    const delta = difference(a, b);
-    const length = Math.hypot(...delta);
-    return { length, unit: length ? delta.map((x) => x / length) : [1, 0] };
-  }
+  const neighborDirections = [0, Math.PI / 7, -Math.PI / 7].map((angle) => [Math.cos(angle), Math.sin(angle)]);
 
   function side(a, b, p, q, vertices) {
-    const { length, unit: along } = direction(b, a);
-    const normal = [-along[1], along[0]];
-    const ap = difference(p, a), aq = difference(q, a);
-    const left = dot(ap, normal), right = dot(aq, normal);
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy);
+    const x = length ? dx / length : 1, y = length ? dy / length : 0;
+    const left = (p[1] - a[1]) * x - (p[0] - a[0]) * y;
+    const right = (q[1] - a[1]) * x - (q[0] - a[0]) * y;
     const sign = Math.min(left, right) >= -Math.max(left, right) ? 1 : -1;
     const first = sign * left <= sign * right;
-    const t = length ? dot(first ? ap : aq, along) / length : .5;
+    const gap = sign * (first ? left : right);
+    if (gap >= .08) return null;
+    const endpoint = first ? p : q;
+    const t = length ? ((endpoint[0] - a[0]) * x + (endpoint[1] - a[1]) * y) / length : .5;
     const [i, j, k, l] = vertices;
-    return { gap: sign * (first ? left : right), normal: normal.map((value) => sign * value),
+    return { gap, normal: [-y * sign, x * sign],
       terms: [[i, t - 1], [j, -t], [first ? k : l, 1]] };
   }
 
@@ -36,18 +33,33 @@
     for (const { kind, vertices: [i, j, k, l], distance } of records) {
       const a = points[i], b = points[j];
       if (kind === 'distance') {
-        const { length, unit } = direction(a, b);
-        retain(distance + .15 - length, unit, [[i, 1], [j, -1]]);
+        const x = a[0] - b[0], y = a[1] - b[1];
+        const squared = x * x + y * y, reach = distance + .15;
+        if (squared >= reach * reach) continue;
+        const length = Math.sqrt(squared);
+        retain(reach - length, length ? [x / length, y / length] : [1, 0], [[i, 1], [j, -1]]);
       } else if (kind === 'segment') {
-        const p = points[k], ab = difference(b, a);
-        const squared = dot(ab, ab);
-        const t = squared ? g.clamp(dot(difference(p, a), ab) / squared, 0, 1) : 0;
-        const { length, unit } = direction(p, g.interpolate(a, b, t));
-        retain(distance + .15 - length, unit, [[i, t - 1], [j, -t], [k, 1]]);
+        const p = points[k];
+        const dx = b[0] - a[0], dy = b[1] - a[1], squared = dx * dx + dy * dy;
+        const px = p[0] - a[0], py = p[1] - a[1];
+        const t = squared ? g.clamp((px * dx + py * dy) / squared, 0, 1) : 0;
+        const x = px - t * dx, y = py - t * dy;
+        const gapSquared = x * x + y * y, reach = distance + .15;
+        if (gapSquared >= reach * reach) continue;
+        const length = Math.sqrt(gapSquared);
+        let normal = length > 1e-10 ? [x / length, y / length] : [1, 0];
+        // At distance zero a tangent step may leave the point on the segment.
+        if (length <= 1e-10 && squared) {
+          const inverseLength = (dx < 0 || dx === 0 && dy < 0 ? -1 : 1) / Math.sqrt(squared);
+          normal = [-dy * inverseLength, dx * inverseLength];
+        }
+        retain(reach - length, normal, [[i, t - 1], [j, -t], [k, 1]]);
       } else {
         const c = points[k], d = points[l];
         const first = side(a, b, c, d, [i, j, k, l]);
+        if (!first) continue;
         const second = side(c, d, a, b, [k, l, i, j]);
+        if (!second) continue;
         const { gap, normal, terms } = first.gap >= second.gap ? first : second;
         retain(.08 - gap, normal, terms);
       }
@@ -84,33 +96,45 @@
     return sum;
   }
 
-  function dampedStep(rows, frozen, damping) {
-    const n = frozen.length;
-    const active = rows.map(({ deficit, terms }) => ({ deficit, terms: terms.filter(([i]) => !frozen[i]) }))
-      .filter(({ terms }) => terms.length);
-    if (active.length < n) {
+  function solveBlock(controls, records, delta, damping) {
+    if (records.length < controls.length) {
       // (JᵀJ + λI)⁻¹Jᵀ = Jᵀ(JJᵀ + λI)⁻¹. Factor in the smaller space.
-      const gram = active.map(({ terms }, i) => Float64Array.from({ length: i + 1 }, (_, j) =>
-        rowProduct(terms, active[j].terms)));
-      const multipliers = solvePositiveDefinite(gram, Float64Array.from(active, ({ deficit }) => deficit), damping);
-      const delta = new Float64Array(n);
-      active.forEach(({ terms }, row) => {
+      const gram = records.map(({ terms }, i) => Float64Array.from({ length: i + 1 }, (_, j) =>
+        rowProduct(terms, records[j].terms)));
+      const multipliers = solvePositiveDefinite(gram, Float64Array.from(records, ({ deficit }) => deficit), damping);
+      records.forEach(({ terms }, row) => {
         for (const [i, value] of terms) delta[i] += value * multipliers[row];
       });
-      return delta;
+      return;
     }
-    const matrix = Array.from({ length: n }, (_, i) => new Float64Array(i + 1));
-    const right = new Float64Array(n);
-    for (const { deficit, terms } of active) {
-      for (const [i, a] of terms) {
-        right[i] += a * deficit;
-        for (const [j, b] of terms) {
-          if (j > i) break;
-          matrix[i][j] += a * b;
+    const matrix = controls.map((_, i) => new Float64Array(i + 1));
+    const local = new Map(controls.map((i, column) => [i, column]));
+    const right = new Float64Array(controls.length);
+    for (const { deficit, terms } of records) {
+      const columns = terms.map(([i, value]) => [local.get(i), value]);
+      for (const [j, a] of columns) {
+        right[j] += a * deficit;
+        for (const [k, b] of columns) {
+          if (k <= j) matrix[j][k] += a * b;
         }
       }
     }
-    return solvePositiveDefinite(matrix, right, damping);
+    solvePositiveDefinite(matrix, right, damping);
+    controls.forEach((i, column) => { delta[i] = right[column]; });
+  }
+
+  function dampedStep(rows, frozen, damping) {
+    const active = [];
+    for (const { deficit, terms } of rows) {
+      const movable = terms.filter(([i, value]) => !frozen[i] && value !== 0);
+      if (movable.length) active.push({ deficit, terms: movable, support: movable.map(([i]) => i) });
+    }
+    const delta = new Float64Array(frozen.length);
+    // Rows in different components share no free coordinates, so the normal equations decouple.
+    for (const { controls, records } of globalThis.JiexianSolverGeometry.components(active, frozen.length)) {
+      solveBlock(controls, records, delta, damping);
+    }
+    return delta;
   }
 
   function improve(level, records, obstacles, start) {
@@ -124,7 +148,7 @@
           .flatMap(([node, factor]) => normal.map((component, axis) => [node * 2 + axis, factor * component]));
         rows.push({ deficit, terms: row });
       });
-      if (cost < 1 && !g.evaluate(level, points.slice(0, count)).count) return points.slice(0, count);
+      if (cost < 1 && !g.evaluate(level, points.slice(0, count)).count) return { points: points.slice(0, count), count: 0 };
       // Freeze directions pointing out of the board at its boundary.
       const frozen = new Uint8Array(n);
       let delta = dampedStep(rows, frozen, damping);
@@ -153,7 +177,39 @@
       }
     }
     const candidate = points.slice(0, count);
-    return g.evaluate(level, candidate).count ? null : candidate;
+    return { points: candidate, count: g.evaluate(level, candidate).count };
+  }
+
+  function neighborSeeds(level, points, neighbors) {
+    const severity = new Float64Array(points.length);
+    g.evaluate(level, points, (nodes, kind) => {
+      if (kind === 'node-edge') {
+        severity[nodes[0]] += 2;
+        severity[nodes[1]] += 2;
+        severity[nodes[2]]++;
+      } else if (kind === 'edge-obstacle' || kind === 'nodes') {
+        for (const node of nodes) severity[node]++;
+      }
+    });
+    const order = points.map((_, i) => i).filter((i) => severity[i]).sort((a, b) => severity[b] - severity[a]);
+    const spacing = g.clearances(level).nodes;
+    const seeds = [];
+    for (const i of order) {
+      const [x, y] = points[i];
+      const nearest = neighbors[i].map((j) => ({ point: points[j], length: g.distance(points[i], points[j]) }))
+        .sort((a, b) => a.length - b.length);
+      for (const { point: [u, v], length } of nearest) {
+        const step = Math.min(.68 * length, length - spacing);
+        if (step <= 0) continue;
+        const dx = (u - x) * step / length, dy = (v - y) * step / length;
+        for (const [c, s] of neighborDirections) {
+          const next = points.slice();
+          next[i] = [g.clamp(x + c * dx - s * dy, ...board[0]), g.clamp(y + s * dx + c * dy, ...board[1])];
+          seeds.push(next);
+        }
+      }
+    }
+    return seeds;
   }
 
   function seed(drawing, angle, reverse) {
@@ -174,19 +230,55 @@
     }));
   }
 
-  function repair(level, problem) {
+  function repair(level, problem, { starts = [], reembed = true, restarts = 36, offer } = {}) {
     if (level.controls.length !== level.points.length || level.controls.some(({ kind }) => kind !== 'free')) return null;
-    const drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
-    if (!drawings?.length) return null;
     const records = [...problem.parts, ...problem.retryParts].flatMap(({ records }) => records);
     const obstacles = problem.coordinates.slice(level.points.length);
+    const stateOf = (points) => level.controls.map(({ members: [i] }) => points[i]);
+    function trySeed(start) {
+      const outcome = improve(level, records, obstacles, start);
+      if (outcome.count) offer?.(stateOf(outcome.points), outcome.count);
+      return outcome;
+    }
+    let initial, partial;
+    for (const state of new Set(starts)) {
+      const start = g.positions(level, state);
+      const result = trySeed(start);
+      if (!result.count) return { status: 'solved', state: stateOf(result.points) };
+      if (!initial) {
+        initial = start;
+        partial = result.points;
+      }
+    }
+    if (initial && restarts) {
+      const neighbors = level.points.map(() => []);
+      for (const [a, b] of level.edges) {
+        neighbors[a].push(b);
+        neighbors[b].push(a);
+      }
+      // Try different directions at a stressed vertex using its incident edges.
+      const seeds = [partial, initial].map((points) => neighborSeeds(level, points, neighbors));
+      const rounds = Math.max(...seeds.map(({ length }) => length));
+      let budget = restarts;
+      for (let i = 0; budget && i < rounds; i++) {
+        for (const nearby of seeds) {
+          if (!nearby[i] || !budget) continue;
+          budget--;
+          const result = trySeed(nearby[i]);
+          if (!result.count) return { status: 'solved', state: stateOf(result.points) };
+        }
+      }
+    }
+    if (!reembed) return null;
+    const drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
+    if (!drawings?.length) return null;
     const seeds = angles.flatMap((angle) => drawings.slice(0, 8).flatMap((drawing) =>
       [false, true].map((reverse) => seed(drawing, angle, reverse))));
     const ranked = seeds.map((points) => ({ points, cost: residuals(records, [...points, ...obstacles]) }))
       .sort((a, b) => a.cost - b.cost);
     for (const { points: start } of ranked.slice(0, 20)) {
-      const points = improve(level, records, obstacles, start);
-      if (points) return { status: 'solved', state: level.controls.map(({ members: [i] }) => points[i]) };
+      const result = trySeed(start);
+      if (!result.count) return { status: 'solved', state: stateOf(result.points) };
     }
     return null;
   }
