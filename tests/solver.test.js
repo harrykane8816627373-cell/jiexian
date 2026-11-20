@@ -34,6 +34,7 @@ const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
 const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft, lengthScreenshotDraft,
   lengthScreenshotWrappedLayout, eightDiskScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
+const { eightDiskCorridorDraft } = require('./eight-corridor-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -232,6 +233,27 @@ test('eight maximum-radius disks leave room for a compact layout on the left', (
     const points = g.positions(level, result.state);
     assert.ok(points.every(([x]) => x < g.width / 2));
     assert.ok(g.totalLength(level, points) < 2200);
+  }
+});
+
+test('two attachment edges allow a crossed section to be reembedded in an eight-disk corridor', () => {
+  const original = eightDiskCorridorDraft();
+  const mirror = ([x, y]) => [g.width - x, y];
+  const mirrored = { ...original, points: original.points.map(mirror),
+    obstacles: original.obstacles.map(({ center, r }) => ({ center: mirror(center), r })) };
+  let seed = 1;
+  function jitter(x) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return x + 1.3 * (seed / 2 ** 32 - .5);
+  }
+  const shiftedObstacles = original.obstacles.map(({ center, r }) => ({ center: center.map(jitter), r }));
+  const perturbed = { ...original, obstacles: shiftedObstacles, points: original.points.map((point) => point.map(jitter)) };
+  for (const draft of [original, mirrored, perturbed]) {
+    const level = puzzles.authored(draft);
+    assert.ok(g.segmentsCross(...[3, 12, 2, 14].map((i) => level.points[i])));
+    const result = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+    checkSolution(level, result);
+    assert.equal(result.preserveRepair, true);
   }
 });
 

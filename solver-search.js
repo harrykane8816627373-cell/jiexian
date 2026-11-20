@@ -49,6 +49,10 @@
       if (rearranged) return rearranged;
     }
     if (problem?.status === 'ready') {
+      if (reembed) {
+        const split = relaxation?.repairSplit(puzzle, problem, candidate);
+        if (split) return split;
+      }
       const compact = relaxation?.findCompact(puzzle, candidate, current);
       if (compact) return compact;
     }

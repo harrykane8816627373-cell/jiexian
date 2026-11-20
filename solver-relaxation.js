@@ -243,6 +243,93 @@
     }));
   }
 
+  function attachmentSide(a, b, [x, y]) {
+    return (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+  }
+
+  function sectionSeeds(level, points, section, links, axis, records, obstacles) {
+    const indices = new Map(section.map((node, index) => [node, index]));
+    const attachments = links.map((edge) => indices.get(edge.find((node) => indices.has(node))));
+    if (attachments[0] === attachments[1]) return [];
+    const outside = links.map((edge) => points[edge.find((node) => !indices.has(node))]);
+    const edges = level.edges.filter((edge) => edge.every((node) => indices.has(node)))
+      .map((edge) => edge.map((node) => indices.get(node)));
+    // Give both attachment vertices a common outer side. The additional edge
+    // guides drawing generation only and never enters the game's constraints.
+    if (!edges.some((edge) => edge.every((i) => attachments.includes(i)))) edges.push(attachments);
+    const drawings = globalThis.JiexianDrawing(section.length, edges) ?? [];
+    const extent = drawingBounds(section.map((node) => points[node]));
+    const { nodes, spacing, obstacleGap } = g.clearances(level);
+    const padding = spacing + obstacleGap;
+    const frames = [padding, padding + nodes].flatMap((extra) => [1, .68, 1.36].map((stretch) =>
+      extent.map(([lo, hi], i) => {
+        const middle = (lo + hi) / 2;
+        const half = (hi - lo) / 2;
+        const span = i === axis ? half + extra : half * stretch;
+        return [Math.max(board[i][0], middle - span), Math.min(board[i][1], middle + span)];
+      })));
+    const ranked = [];
+    for (const drawing of drawings) {
+      const [a, b] = attachments.map((i) => drawing[i]);
+      const sides = drawing.map((point) => attachmentSide(a, b, point));
+      if (Math.min(...sides) < -1e-6 && Math.max(...sides) > 1e-6) continue;
+      const inside = sides.findIndex((side) => Math.abs(side) > 1e-6);
+      if (inside === -1) continue;
+      for (let turn = 0; turn < 24; turn++) {
+        for (const reflect of [false, true]) {
+          const shape = orientDrawing(drawing, turn * (Math.PI / 12), reflect);
+          const bounds = drawingBounds(shape);
+          for (const frame of frames) {
+            const placed = fitDrawing(shape, bounds, frame);
+            const [u, v] = attachments.map((i) => placed[i]);
+            const side = attachmentSide(u, v, placed[inside]);
+            if (outside.some((point) => attachmentSide(u, v, point) * side >= 0)) continue;
+            const trial = points.slice();
+            section.forEach((node, i) => { trial[node] = placed[i]; });
+            const limit = ranked[63]?.cost ?? Infinity;
+            const cost = residuals(records, [...trial, ...obstacles], undefined, limit);
+            if (cost >= limit) continue;
+            ranked.push({ points: trial, cost });
+            ranked.sort((first, last) => first.cost - last.cost);
+            if (ranked.length > 64) ranked.pop();
+          }
+        }
+      }
+    }
+    return ranked;
+  }
+
+  function repairSplit(level, problem, state) {
+    const points = g.positions(level, state);
+    let crossing;
+    const { count } = g.evaluate(level, points, (nodes, kind) => { if (kind === 'crossing') crossing ??= nodes; });
+    if (!crossing || count > 4) return null;
+    const records = [...problem.parts, ...problem.retryParts].flatMap(({ records }) => records);
+    const obstacles = problem.coordinates.slice(points.length);
+    const seen = new Set();
+    for (let axis = 0; axis < 2; axis++) {
+      const sorted = points.map((_, i) => i).sort((a, b) => points[a][axis] - points[b][axis]);
+      for (let cut = 4; cut <= sorted.length - 4; cut++) {
+        const left = sorted.slice(0, cut), right = sorted.slice(cut).reverse();
+        const section = [left, right].find((side) => crossing.every((node) => side.includes(node)));
+        if (!section) continue;
+        const members = new Set(section);
+        const links = level.edges.filter(([a, b]) => members.has(a) !== members.has(b));
+        if (links.length !== 2) continue;
+        const key = [...members].sort((a, b) => a - b).join(',');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        for (const seed of sectionSeeds(level, points, section, links, axis, records, obstacles)) {
+          const result = improve(level, records, obstacles, seed.points, 150);
+          if (!result.count) return { status: 'solved',
+            state: level.controls.map(({ members: [i] }) => result.points[i]), preserveRepair: true };
+        }
+        if (seen.size >= 3) return null;
+      }
+    }
+    return null;
+  }
+
   function seed(drawing, angle, reverse) {
     const rotated = orientDrawing(drawing, angle);
     const bounds = board.map(([lo, hi], axis) => {
@@ -554,5 +641,5 @@
     return result;
   }
 
-  globalThis.JiexianSolverRelaxation = { repair, compact, findCompact, supportsCompact };
+  globalThis.JiexianSolverRelaxation = { repair, repairSplit, compact, findCompact, supportsCompact };
 })();

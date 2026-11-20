@@ -2,7 +2,7 @@
 
 importScripts('./engine.js?v=13', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
   './solver-coupled-repair.js?v=2', './solver-repair.js?v=2', './solver-obstacles.js?v=1', './puzzles.js?v=13',
-  './solver-search.js?v=11', './solver-relaxation.js?v=8', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
+  './solver-search.js?v=12', './solver-relaxation.js?v=9', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
   './solver-geometry.js?v=9', './exact-solver.js?v=11', './solver-length.js?v=5');
 
 async function loadZ3() {
