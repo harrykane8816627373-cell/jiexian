@@ -27,5 +27,5 @@
 ## 测试与发布
 
 - `node --test tests/solver.test.js` 运行求解和回放回归测试。
-- `node tests/benchmark-solver.cjs --neighborhood` 测量窄禁行通道的精确求解。`--algebra` 测量星盘净距判定。`--breakout` 测量截图重建棋盘。
+- `node tests/benchmark-solver.cjs --neighborhood` 测量窄禁行通道的精确求解。`--block` 测量多点协调过窄通道。`--algebra` 测量星盘净距判定。`--breakout` 测量截图重建棋盘。
 - 将待发布提交推送到 GitHub 后，运行 `node scripts/package-pagelet.cjs ../jiexian-pagelet`。将生成目录或其内容的 ZIP 交给 Pagelet，ZIP 根目录须包含 `index.html`。包内的 Worker 从该 GitHub 提交读取 WASM 并校验 SHA-256。

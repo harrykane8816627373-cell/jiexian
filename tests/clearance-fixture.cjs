@@ -1,5 +1,5 @@
-function corridorLevel(g, { halfGap, shift }) {
-  const points = [[112.341, 270 + shift], [791.877, 270]];
+function corridorLevel(g, { halfGap, shift, rightShift = 0 }) {
+  const points = [[112.341, 270 + shift], [791.877, 270 + rightShift]];
   const edges = [[0, 1]];
   const columns = [110, 186, 720, 790];
   for (const [row, y] of [62, 119, 177, 388, 434, 487].entries()) {

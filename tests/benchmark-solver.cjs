@@ -21,10 +21,12 @@ const corridorCase = process.argv.includes('--corridors');
 const breakoutCase = process.argv.includes('--breakout');
 const algebraCase = process.argv.includes('--algebra');
 const neighborhoodCase = process.argv.includes('--neighborhood');
-const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || neighborhoodCase;
+const blockCase = process.argv.includes('--block');
+const seededExact = neighborhoodCase || blockCase;
+const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || seededExact;
 const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
+const revision = blockCase ? '818a382' : neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
   corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
   hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
   obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
@@ -34,7 +36,7 @@ for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-
   'solver-contact-repair.js', 'solver-obstacle-corridors.js', 'puzzles.js', 'solver-search.js', 'solver-tracks.js',
   'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   // Use the same V8 realm in the two isolated subprocesses for the full-pipeline comparison.
-  if (!historicalProcess || neighborhoodCase && name !== 'exact-solver.js') require(path.join(repo, name));
+  if (!historicalProcess || seededExact && name !== 'exact-solver.js') require(path.join(repo, name));
   else if ((breakoutCase || algebraCase || name !== 'solver-obstacle-corridors.js') && (!contactCase || name !== 'solver-contact-repair.js')) {
     runInThisContext(oldScript(name), { filename: name });
   }
@@ -70,7 +72,7 @@ function run(solver, level) {
   const start = performance.now();
   try {
     let problem;
-    let seed = neighborhoodCase ? level.initial : undefined;
+    let seed = seededExact ? level.initial : undefined;
     const search = solver === current ? globalThis.JiexianSolverSearch : sandbox.JiexianSolverSearch;
     if (pipeline && search) {
       const phase = search.search(level, level.initial, solver.prepareExact);
@@ -210,7 +212,10 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = neighborhoodCase ? [
+const cases = blockCase ? [
+  ['26 nodes with both edge endpoints three units above a narrow corridor', corridorLevel(g, { halfGap: .0001, shift: 3, rightShift: 3 }), 9, 1],
+  ['26 nodes with the blocked edge requiring a change in slope', corridorLevel(g, { halfGap: .0001, shift: 3, rightShift: 9 }), 9, 1],
+] : neighborhoodCase ? [
   ['26 nodes around a 0.0002-unit corridor', corridorLevel(g, { halfGap: .0001, shift: .45 }), 9, 1],
   ['26 nodes around a 0.24-unit corridor', corridorLevel(g, { halfGap: .12, shift: 5 }), 9, 1],
 ] : algebraCase ? [

@@ -63,11 +63,23 @@
       if (n === d) return '1';
       return n < 0n ? call('-', call('/', String(-n), String(d))) : call('/', String(n), String(d));
     };
+    const { translation, axisMotion } = part;
+    const shifts = ['shiftX', 'shiftY'];
+    if (translation) {
+      for (const name of shifts) {
+        setup.push(`(declare-const ${name} Real)`);
+        bounded(name, real(-translation.radius), real(translation.radius));
+      }
+    }
     const controls = part.controls.map((i) => {
       const control = level.controls[i];
       const { kind, members: [node, partner] } = control;
       const names = kind === 'rail' ? [`x${i}`] : [`x${i}`, `y${i}`];
-      for (const name of names) setup.push(`(declare-const ${name} Real)`);
+      names.forEach((name, axis) => {
+        if (translation) define(name, 'Real', add(real(translation.pose[i][axis]), shifts[axis]));
+        else if (axisMotion && axis !== axisMotion.axis) define(name, 'Real', real(axisMotion.pose[i][axis]));
+        else setup.push(`(declare-const ${name} Real)`);
+      });
       const [x, y] = names;
       if (kind === 'rotor') {
         // Every point (x, y) of the unit circle is (cos θ, sin θ) for one common rotation θ.
@@ -143,9 +155,11 @@
   function solvePart(level, coordinates, railBounds, part, query, state, preferred, limit) {
     const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part);
     const first = [], pending = [];
+    // A small local model usually costs less to solve once than to refine.
+    const smallNeighborhood = part.neighborhood?.size && constraints.length <= 12;
     let prioritized = 0;
     for (const { name, unary, record } of constraints) {
-      if (unary || preferred?.has(record) && prioritized++ < 24) first.push(name);
+      if (smallNeighborhood || unary || preferred?.has(record) && prioritized++ < 24) first.push(name);
       else pending.push(name);
     }
     const enforce = (names) => {
@@ -249,6 +263,26 @@
     return { ...part, controls, records, neighborhood };
   }
 
+  function* blockNeighborhoods(level, part, active, failed, pose, points, radius, triedAll) {
+    const local = restrictedPart(level, part, active, pose, points, radius);
+    if (!local) return;
+    if (local.controls.every((i) => level.controls[i].kind === 'free')) {
+      // Relative geometry within a translated block is constant.
+      const internal = ({ vertices }) => vertices.every((i) => active.has(level.ownership[i]));
+      if (!failed.some(internal)) {
+        yield { ...local, translation: { pose, radius }, records: local.records.filter((record) => !internal(record)) };
+      }
+      const blockedEdge = failed.find(({ kind, vertices: [a, b, p] }) =>
+        kind === 'segment' && p >= level.points.length && active.has(level.ownership[a]) && active.has(level.ownership[b]));
+      if (blockedEdge) {
+        const [a, b] = blockedEdge.vertices.map((i) => points[i]);
+        const axis = Math.abs(b[0] - a[0]) > Math.abs(b[1] - a[1]) ? 1 : 0;
+        yield { ...local, axisMotion: { pose, axis } };
+      }
+    }
+    if (!triedAll) yield local;
+  }
+
   function prepareExact(level, current = level.initial) {
     const problem = analyze(level);
     if (problem.unsat) return { status: 'unsat' };
@@ -295,6 +329,7 @@
       // The unrestricted problem below still decides every failure of this restricted attempt.
       let attempts = 0;
       let smallAttempts = 0;
+      let blockAttempts = 0;
       for (const part of parts) {
         if (attempts >= 3) break;
         const failed = violations(part, seedPoints);
@@ -302,17 +337,34 @@
         const active = new Set([...required, ...failed.flatMap(({ support }) => support)]);
         const frozenPoints = (selected) => coordinates.map((point, i) =>
           selected.has(level.ownership[i]) ? point : seedPoints[i]);
+        const tryWitness = (local, selected) => {
+          const proposed = g.copy(trial);
+          if (solve(local, frozenPoints(selected), proposed, null, true) === 'sat' && playable(level, proposed)) {
+            return { status: 'solved', state: proposed, preserveRepair: true };
+          }
+          return null;
+        };
         if (level.obstacles.length && failed.length && failed.length <= 8 && required.length <= 2) {
           // Every current conflict must lose at least one frozen control. This
           // branch looks for a witness only, even when every small support fails.
+          const radius = 30;
+          let triedAll = false;
           for (const selected of smallestSupports(failed, required)) {
             if (smallAttempts >= 4) break;
-            const local = restrictedPart(level, part, selected, trial, seedPoints, 30);
+            const local = restrictedPart(level, part, selected, trial, seedPoints, radius);
             if (!local) continue;
             smallAttempts++;
-            const proposed = g.copy(trial);
-            if (solve(local, frozenPoints(selected), proposed, null, true) !== 'sat') continue;
-            if (playable(level, proposed)) return { status: 'solved', state: proposed, preserveRepair: true };
+            triedAll ||= selected.size === active.size;
+            const result = tryWitness(local, selected);
+            if (result) return result;
+          }
+          if (active.size >= 2 && active.size <= 4 && blockAttempts < 3) {
+            for (const local of blockNeighborhoods(level, part, active, failed, trial, seedPoints, radius, triedAll)) {
+              if (blockAttempts >= 3) break;
+              blockAttempts++;
+              const result = tryWitness(local, active);
+              if (result) return result;
+            }
           }
         }
         if (!active.size || active.size > 6 || active.size === part.controls.length) continue;

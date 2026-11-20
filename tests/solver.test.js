@@ -692,6 +692,29 @@ test('one active control solves a very narrow obstacle corridor in a 26-node par
   }
 });
 
+for (const [rightShift, translation] of [[3, true], [9, false]]) {
+  test(`two free endpoints ${translation ? 'translate together' : 'change the edge slope'} to fit a narrow corridor`, () => {
+    const level = corridorLevel(g, { halfGap: .0001, shift: 3, rightShift });
+    assert.equal(g.evaluate(level, level.points).count, 1);
+    const problem = prepareExact(level);
+    const context = init();
+    let declarations = [];
+    try {
+      const result = solveExact(level, (command) => {
+        if (command === '(reset)') declarations = [];
+        for (const [, name] of command.matchAll(/\(declare-const (\w+) /g)) declarations.push(name);
+        return ask(context, command);
+      }, problem, level.initial);
+      checkSolution(level, result);
+      assert.deepEqual(declarations, translation ? ['shiftX', 'shiftY'] : ['y0', 'y1']);
+      assert.deepEqual(result.state.slice(2), level.initial.slice(2));
+      for (let i = 0; i < 2; i++) assert.ok(Math.abs(result.state[i][1] - level.initial[i][1]) > 2);
+    } finally {
+      destroy(context);
+    }
+  });
+}
+
 test('an edge through the disk center can move while a fixed point and rail stay in place', () => {
   const points = [[160, 270], [740, 270], [400, 90], [500, 90]];
   const level = g.createLevel({
