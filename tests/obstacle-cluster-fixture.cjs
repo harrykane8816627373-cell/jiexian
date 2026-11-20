@@ -1,5 +1,4 @@
-function fromPixels([left, top], pixels, circles) {
-  const scale = 1090 / 852;
+function fromPixels([left, top], pixels, circles, scale = 1090 / 852) {
   const world = ([x, y]) => [24 + (x - left) / scale, 24 + (y - top) / scale];
   const points = pixels.map(world).map(([x, y]) => [Math.max(42, Math.min(858, x)), Math.max(42, Math.min(498, y))]);
   const edges = [[23, 25], [25, 21], [21, 19], [19, 22], [19, 4], [4, 5], [4, 3], [23, 24], [24, 8], [8, 3],
@@ -45,4 +44,28 @@ function near24ScreenshotDraft(shift = 1) {
   return draft;
 }
 
-module.exports = { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft };
+function lengthScreenshotDraft() {
+  return fromPixels([196.3, 175.33],
+    [[1168.777, 383], [726.927, 728.346], [780.753, 669.338], [1024.436, 309.606], [1106.222, 241.372],
+      [1018.707, 388.221], [645.918, 691], [558.973, 617.201], [983.288, 403.759], [1102.149, 445.379],
+      [1092.462, 308.144], [822.909, 728.346], [816.171, 653.85], [575.083, 728.344], [1069.492, 718.999],
+      [1168.777, 658.937], [902.601, 728.345], [1149.972, 579.838], [926.841, 201.791], [1132.606, 490.104],
+      [792.645, 196.346], [784.87, 266.753], [659.34, 196.347], [736.993, 366.2], [726.005, 224.348],
+      [1080.968, 392.719], [1108.825, 356.054]],
+    [[399.904, 408.8, 112], [608.79, 324.432, 109.807], [418.21, 640.758, 112], [733.065, 559.159, 112],
+      [876.356, 378.429, 112], [1013.311, 582.708, 112]], 7 / 6);
+}
+
+// The 1951.99 result from the 36-edge screenshot. Node labels follow the
+// draft graph, with subpixel corrections to make all tight clearances legal.
+function lengthScreenshotWrappedLayout() {
+  return [[814.992, 170.3877], [612.1413, 393.6255], [817.0669, 306.5895], [837.0913, 280.3546], [855.9197, 239.1446],
+    [773.6083, 259.182], [673.0679, 475.0252], [831.2643, 412.6069], [801.6765, 277.3959], [762.5381, 194.4471],
+    [816.0314, 247.6794], [617.7034, 311.575], [739.5355, 256.5862], [774.8666, 475.3869], [718.7112, 222.726],
+    [761.4784, 161.4621], [706.682, 253.4593], [751.5696, 225.8565], [856.7686, 306.8499], [795.4431, 196.9766],
+    [857.3904, 359.196], [836.981, 333.2617], [857.5164, 432.7686], [826.9996, 445.3326], [857.46, 392.3374],
+    [787.3783, 229.1717], [822.9942, 215.1444]];
+}
+
+module.exports = { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft,
+  lengthScreenshotDraft, lengthScreenshotWrappedLayout };

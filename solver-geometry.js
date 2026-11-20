@@ -13,6 +13,11 @@
   const norm = (v) => dot(v, v);
   const opposite = (a, b) => a < 0n && b > 0n || a > 0n && b < 0n;
 
+  function floorSqrt(squared) {
+    const root = trackSolver.ceilSqrt(squared);
+    return root * root === squared ? root : root - 1n;
+  }
+
   function segmentDistanceSquared(point, a, b) {
     const ab = vector(b, a), ap = vector(point, a);
     const projection = dot(ap, ab);
@@ -301,16 +306,95 @@
     return { ...result, coordinates, railBounds, parts: region.parts, retryParts: [...result.retryParts, ...region.retry] };
   }
 
+  function obstacleDetour(a, b, disks) {
+    const axis = vector(b, a);
+    const squaredLength = norm(axis);
+    const length = floorSqrt(squaredLength);
+    let bound = length;
+    for (const [center, radius] of disks) {
+      const start = vector(a, center);
+      const end = vector(b, center);
+      const alongStart = dot(start, axis);
+      const alongEnd = dot(end, axis);
+      if (alongStart >= 0n || alongEnd <= 0n) continue;
+      // The path crosses the perpendicular through the disk center. Its
+      // lateral displacement there is at least the gap to the nearer exit.
+      const side = cross(axis, start);
+      const gap = radius * length - max(side, -side);
+      if (gap <= 0n) continue;
+      const first = floorSqrt((square(alongStart) + square(gap)) / squaredLength);
+      const last = floorSqrt((square(alongEnd) + square(gap)) / squaredLength);
+      bound = max(bound, first + last);
+    }
+    return bound;
+  }
+
+  function enclosedNodeBounds(neighbors, weights, spacing) {
+    if (weights.length < 6 || weights.length > 3 * neighbors.length - 6) return [];
+    // The visible angles around an enclosed node sum to at least one turn.
+    // With endpoint spacing d, a side of length l <= 2d subtends at most
+    // 2 asin(l / (2d)). Secant bounds give the two minimum perimeters.
+    const fourPerimeter = 5n * spacing;
+    const fivePerimeter = 4n * spacing + floorSqrt(3n * square(spacing));
+    const candidates = [];
+    const edgeTo = neighbors.map((list) => new Map(list.map(([node, , edge]) => [node, edge])));
+    for (const [start, adjacent] of edgeTo.entries()) {
+      for (let end = start + 1; end < edgeTo.length; end++) {
+        const shared = [...adjacent.keys()].filter((node) => edgeTo[end].has(node));
+        if (shared.length < 2) continue;
+        const twoEdges = (node) => [adjacent.get(node), edgeTo[end].get(node)];
+        const sums = (edges) => edges.reduce((sum, edge) => sum + weights[edge], 0n);
+        for (const [i, left] of shared.entries()) {
+          const first = twoEdges(left);
+          for (let j = i + 1; j < shared.length; j++) {
+            const right = shared[j];
+            const second = twoEdges(right);
+            const outside = fourPerimeter - sums([...first, ...second]);
+            if (outside <= 0n) continue;
+            function include(third, perimeter) {
+              // Three internally disjoint paths form a theta graph. Its outer
+              // face uses two paths and encloses a node from the third path.
+              const gain = min(outside, min(perimeter - sums([...first, ...third]),
+                perimeter - sums([...second, ...third])));
+              if (gain > 0n) candidates.push({ gain, edges: [...first, ...second, ...third] });
+            }
+            shared.slice(j + 1).forEach((node) => include(twoEdges(node), fourPerimeter));
+            for (const [a, fromStart] of adjacent) {
+              if (a === end || a === left || a === right) continue;
+              for (const [b, toEnd] of edgeTo[end]) {
+                if (b === start || b === left || b === right) continue;
+                const middle = edgeTo[a].get(b);
+                if (middle !== undefined && a !== b) include([fromStart, middle, toEnd], fivePerimeter);
+              }
+            }
+          }
+        }
+      }
+    }
+    return candidates;
+  }
+
+  function disjointGain(candidates) {
+    const used = new Set();
+    let sum = 0n;
+    candidates.sort((a, b) => a.gain === b.gain ? 0 : a.gain > b.gain ? -1 : 1);
+    for (const { gain, edges } of candidates) {
+      if (edges.some((edge) => used.has(edge))) continue;
+      edges.forEach((edge) => used.add(edge));
+      sum += gain;
+    }
+    return sum;
+  }
+
   function lengthLowerBound(level) {
-    const spacing = g.clearances(level).nodes;
+    const { nodes, obstacleGap } = g.clearances(level);
     const endpoints = level.controls.flatMap(({ kind, a, b }) => kind === 'rail' ? [...a, ...b] : []);
-    const units = scaledDecimals([1, spacing, ...level.points.flat(), ...endpoints]);
+    const obstacles = level.obstacles.map(({ center, r }) => [center, r + obstacleGap]);
+    const units = scaledDecimals([1, nodes, ...level.points.flat(), ...endpoints, ...obstacles.flat(2)]);
     const points = level.points.map((point) => point.map(units));
-    const floorRoot = (squared) => {
-      const root = trackSolver.ceilSqrt(squared);
-      return root * root === squared ? root : root - 1n;
-    };
-    const separation = (a, b) => floorRoot(norm(vector(points[a], points[b])));
+    const disks = obstacles.map(([center, radius]) => [center.map(units), units(radius)]);
+    const spacing = units(nodes);
+    const separation = (a, b) => floorSqrt(norm(vector(points[a], points[b])));
     const domains = points.map((point, i) => {
       const control = level.controls[level.ownership[i]];
       if (!control) return [point, point];
@@ -320,21 +404,24 @@
       if (!constantClear('crossing', [a, b, c, d], 0n)) return 0n;
       const distances = [segmentDistanceSquared(a, c, d), segmentDistanceSquared(b, c, d),
         segmentDistanceSquared(c, a, b), segmentDistanceSquared(d, a, b)];
-      return floorRoot(distances.map(([numerator, denominator]) => numerator / denominator).reduce(min));
+      return floorSqrt(distances.map(([numerator, denominator]) => numerator / denominator).reduce(min));
     }
     const neighbors = points.map(() => []);
+    const weights = [];
     let total = 0n;
     for (const [edge, [a, b]] of level.edges.entries()) {
       const owner = level.ownership[a];
       const rotorChord = owner >= 0 && owner === level.ownership[b] && level.controls[owner].kind === 'rotor';
       const known = rotorChord ? separation(a, b) : domains[a] && domains[b] ? domainDistance(domains[a], domains[b]) : 0n;
-      const weight = max(units(spacing), known);
+      const weight = max(spacing, known);
+      weights.push(weight);
       neighbors[a].push([b, weight, edge]);
       neighbors[b].push([a, weight, edge]);
       total += weight;
     }
     const fixed = points.map((_, i) => i).filter((i) => level.ownership[i] < 0);
     const paths = [];
+    const detours = [];
     for (const [index, start] of fixed.entries()) {
       // Replacing a path's per-edge bounds by the distance of its fixed endpoints
       // is valid by the triangle inequality. The cheapest such path gives the best gain.
@@ -360,24 +447,22 @@
       for (const end of fixed.slice(index + 1)) {
         if (costs[end] === null) continue;
         const gain = separation(start, end) - costs[end];
-        if (gain <= 0n) continue;
+        const detour = disks.length ? obstacleDetour(points[start], points[end], disks) - costs[end] : gain;
+        if (detour <= 0n) continue;
         const edges = [];
         for (let i = end; i !== start;) {
           const [parent, edge] = parents[i];
           edges.push(edge);
           i = parent;
         }
-        paths.push({ gain, edges });
+        if (gain > 0n) paths.push({ gain, edges });
+        if (detour > gain) detours.push({ gain: detour, edges });
       }
     }
-    // Each eligible path replaces a different set of per-edge terms.
-    const used = new Set();
-    paths.sort((a, b) => a.gain === b.gain ? 0 : a.gain > b.gain ? -1 : 1);
-    for (const { gain, edges } of paths) {
-      if (edges.some((edge) => used.has(edge))) continue;
-      edges.forEach((edge) => used.add(edge));
-      total += gain;
-    }
+    const enclosed = enclosedNodeBounds(neighbors, weights, spacing);
+    // Each added gain replaces a different set of per-edge terms. Keep the
+    // original path packing as a fallback in case a new candidate overlaps it.
+    total += max(disjointGain([...paths, ...detours, ...enclosed]), disjointGain(paths));
     return Number(total * 1000000n / units(1)) / 1e6;
   }
 

@@ -103,8 +103,8 @@
     return result(level, state, length, lower);
   }
 
-  function start(level, candidates, progress) {
-    const lower = globalThis.JiexianSolverGeometry.lengthLowerBound(level);
+  function start(level, candidates, progress, previousLower = 0) {
+    const lower = Math.max(previousLower, globalThis.JiexianSolverGeometry.lengthLowerBound(level));
     let best;
     for (const state of candidates) {
       if (!state || g.evaluate(level, g.positions(level, state)).count) continue;

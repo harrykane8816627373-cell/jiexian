@@ -363,26 +363,130 @@
     return null;
   }
 
+  function polishLength(level, records, obstacles, initial, offer) {
+    let points = initial;
+    let best = g.totalLength(level, points);
+    for (const stride of [9, 4, 1.8, .75, .25, .08]) {
+      for (let step = 0; step < 8; step++) {
+        const gradient = points.map(() => [0, 0]);
+        for (const [a, b] of level.edges) {
+          const length = g.distance(points[a], points[b]);
+          if (!length) continue;
+          for (let axis = 0; axis < 2; axis++) {
+            const force = (points[b][axis] - points[a][axis]) / length;
+            gradient[a][axis] += force;
+            gradient[b][axis] -= force;
+          }
+        }
+        // Move all endpoints toward shorter edges, then repair the local contacts together.
+        const trial = points.map((point, i) => point.map((value, axis) =>
+          g.clamp(value + stride * gradient[i][axis], ...board[axis])));
+        const candidate = improve(level, records, obstacles, trial, 14);
+        if (candidate.count) break;
+        const length = g.totalLength(level, candidate.points);
+        if (length >= best - 1e-7) break;
+        points = candidate.points;
+        best = length;
+        if (offer(points)) return true;
+      }
+    }
+    return false;
+  }
+
+  function positionTemplates(level, drawings, records, obstacles) {
+    const clearance = g.clearances(level).nodes;
+    const obstacleRecords = records.filter(({ vertices }) => vertices.some((i) => i >= level.points.length));
+    const placements = [];
+    for (const drawing of drawings) {
+      const length = g.totalLength(level, drawing);
+      const rotations = [];
+      for (const angle of bandAngles) {
+        const rotated = orientDrawing(drawing, angle);
+        const extent = drawingBounds(rotated);
+        const [horizontal, vertical] = extent.map(([lo, hi], axis) => {
+          const [wallLo, wallHi] = board[axis];
+          const room = wallHi - wallLo - (hi - lo);
+          if (room < 0) return [];
+          const divisions = Math.min(32, Math.max(1, Math.ceil(room / clearance)));
+          return Array.from({ length: divisions + 1 }, (_, i) => wallLo - lo + room * i / divisions);
+        });
+        let best = Infinity, points;
+        for (const x of horizontal) {
+          for (const y of vertical) {
+            const trial = rotated.map(([u, v]) => [g.clamp(u + x, ...board[0]), g.clamp(v + y, ...board[1])]);
+            const cost = residuals(obstacleRecords, [...trial, ...obstacles], undefined, best);
+            if (cost >= best) continue;
+            best = cost;
+            points = trial;
+          }
+        }
+        if (points) rotations.push({ points, cost: best });
+      }
+      const nearest = rotations.sort((a, b) => a.cost - b.cost).slice(0, 3);
+      // Retain room for different templates and favor short placements with shallow contacts.
+      for (const { points, cost } of nearest) placements.push({ points, estimate: length + 2 * Math.sqrt(cost) });
+    }
+    return placements.sort((a, b) => a.estimate - b.estimate).slice(0, 10);
+  }
+
   function compact(level, model, state, offer) {
     const { coordinates, part: { records } } = model;
     const obstacles = coordinates.slice(level.points.length);
-    const drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
-    const seeds = drawings?.length ? boundarySeeds(level, drawings, records, obstacles).slice(0, 10) : [];
-    const starts = [{ points: g.positions(level, state) }, ...seeds];
-    const spacing = g.clearances(level).nodes;
-    const targets = [2.12, 1.52, 1.15, 1.005].map((ratio) => [
-      ...records, ...level.edges.map((vertices) => ({ vertices, kind: 'short', distance: spacing * ratio })),
-    ]);
-    for (const start of starts) {
-      let points = start.points;
-      for (const constraints of targets) {
-        const moved = improve(level, constraints, obstacles, points, 65);
-        const checked = moved.count ? improve(level, records, obstacles, moved.points, 36) : moved;
-        if (checked.count) continue;
-        points = checked.points;
-        if (offer(level.controls.map(({ members: [i] }) => points[i]))) return;
-      }
+    let best = g.positions(level, state);
+    let bestLength = g.totalLength(level, best);
+    function consider(points) {
+      const length = g.totalLength(level, points);
+      if (!Number.isFinite(length) || length >= bestLength - 1e-8 || g.evaluate(level, points).count) return false;
+      best = points;
+      bestLength = length;
+      return offer(level.controls.map(({ members: [i] }) => points[i]));
     }
+    const spacing = g.clearances(level).nodes;
+    const targets = [2.12, 1.52, 1.15, 1.005].map((ratio) =>
+      level.edges.map((vertices) => ({ vertices, kind: 'short', distance: spacing * ratio })));
+
+    function shortenToCaps(boardLevel, constraints, circles, points, caps) {
+      const moved = improve(boardLevel, [...constraints, ...caps], circles, points, 65);
+      const checked = moved.count ? improve(boardLevel, constraints, circles, moved.points, 36) : moved;
+      return checked.count ? null : checked.points;
+    }
+
+    function trySeed(start) {
+      let points = start;
+      for (const caps of targets) {
+        const checked = shortenToCaps(level, records, obstacles, points, caps);
+        if (!checked) continue;
+        points = checked;
+        if (consider(points)) return true;
+      }
+      return false;
+    }
+
+    if (trySeed(best)) return;
+    const first = globalThis.JiexianDrawing(level.points.length, level.edges);
+    const clear = { ...level, obstacles: [] };
+    const internal = records.filter(({ vertices }) => vertices.every((i) => i < level.points.length));
+    const floating = [];
+    // Pack the graph before placing it among the circles, so an obstacle
+    // inside a cycle of the current layout cannot keep that cycle stretched.
+    const templates = [...(first?.slice(0, 5) ?? []), best];
+    for (const drawing of templates) {
+      let points = fitDrawing(drawing, drawingBounds(drawing), [[240, 660], [90, 450]]);
+      for (const caps of targets) points = shortenToCaps(clear, internal, [], points, caps) ?? points;
+      if (g.evaluate(clear, points).count) continue;
+      polishLength(clear, internal, [], points, (shorter) => { points = shorter; });
+      floating.push(points);
+    }
+    for (const { points } of positionTemplates(level, floating, records, obstacles)) {
+      if (consider(points)) return;
+      if (trySeed(points)) return;
+    }
+
+    if (polishLength(level, records, obstacles, best, consider)) return;
+    const polished = best;
+    const seeds = first?.length ? boundarySeeds(level, first, records, obstacles).slice(0, 10) : [];
+    if (seeds.some(({ points }) => trySeed(points))) return;
+    if (best !== polished) polishLength(level, records, obstacles, best, consider);
   }
 
   globalThis.JiexianSolverRelaxation = { repair, compact };

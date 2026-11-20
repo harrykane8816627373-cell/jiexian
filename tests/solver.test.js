@@ -32,7 +32,8 @@ const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
-const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
+const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft, lengthScreenshotDraft,
+  lengthScreenshotWrappedLayout } = require('./obstacle-cluster-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -76,6 +77,40 @@ test('disjoint fixed endpoint paths add their bounds without double counting any
   const level = puzzles.authored({ points: [[100, 100], [400, 100], [250, 130], [120, 420], [520, 420], [320, 390]],
     edges: [[0, 2], [2, 1], [3, 5], [5, 4]], fixed: [0, 1, 3, 4] });
   assert.equal(globalThis.JiexianSolverGeometry.lengthLowerBound(level), 700);
+});
+
+test('an enclosing cycle gives a global length bound even with every node free', () => {
+  const center = [350, 300];
+  const points = Array.from({ length: 5 }, (_, i) =>
+    [center[0] + 33.000001 * Math.cos(i * Math.PI / 3), center[1] + 33.000001 * Math.sin(i * Math.PI / 3)]);
+  points.push(center);
+  const edges = [...g.cycle(5), [0, 5], [5, 2]];
+  const level = puzzles.authored({ points, edges });
+  assert.equal(g.evaluate(level, points).count, 0);
+  const bound = globalThis.JiexianSolverGeometry.lengthLowerBound(level);
+  const length = g.totalLength(level, points);
+  assert.equal(bound, 255.157676);
+  assert.ok(bound <= length && length - bound < .00001);
+
+  // An interior path without its own node can be an ordinary diagonal.
+  const diagonal = puzzles.authored({ points: points.slice(0, 5), edges: [...g.cycle(5), [0, 2]] });
+  assert.equal(globalThis.JiexianSolverGeometry.lengthLowerBound(diagonal), 198);
+
+  const quadrilateral = puzzles.authored({ points: [[317, 300], [383, 300], [350, 267], [350, 333], center],
+    edges: [[0, 2], [2, 1], [0, 3], [3, 1], [0, 4], [4, 1]] });
+  assert.equal(g.evaluate(quadrilateral, quadrilateral.points).count, 0);
+  assert.equal(globalThis.JiexianSolverGeometry.lengthLowerBound(quadrilateral), 231);
+});
+
+test('a forbidden disk can force a fixed-endpoint path longer than its chord', () => {
+  const points = [[100, 100], [400, 100], [250, 42]];
+  const draft = { points, edges: [[0, 2], [2, 1]], fixed: [0, 1] };
+  const level = puzzles.authored({ ...draft, obstacles: [{ center: [250, 120], r: 45 }] });
+  assert.equal(g.evaluate(level, points).count, 0);
+  const bound = globalThis.JiexianSolverGeometry.lengthLowerBound(level);
+  assert.ok(bound > 305.55 && bound <= 2 * Math.hypot(150, 29));
+  const tangent = puzzles.authored({ ...draft, obstacles: [{ center: [250, 149], r: 45 }] });
+  assert.equal(globalThis.JiexianSolverGeometry.lengthLowerBound(tangent), 300);
 });
 
 test('distance from an anchor to an entire rail gives a rigorous per-edge bound', () => {
@@ -144,14 +179,38 @@ test('close nodes 24 and 3 with a single obstacle contact can reembed and shorte
     checkSolution(level, feasible);
     if (shift === 1) {
       const start = optimalLength.start(level, [feasible.state]);
-      const updates = [];
-      const best = optimalLength.refine(level, start, (result) => updates.push(result));
-      assert.ok(updates.length >= 2);
+      let lastLength = start.length;
+      const best = optimalLength.refine(level, start, (result) => {
+        assert.ok(result.length < lastLength);
+        lastLength = result.length;
+      });
+      assert.ok(lastLength < start.length);
       assert.ok(best.length < .75 * start.length);
       assert.equal(g.evaluate(level, g.positions(level, best.state)).count, 0);
       assert.equal(best.status, 'length-best');
     }
   }
+});
+
+test('shortest length search escapes a loop around a forbidden circle', () => {
+  const level = puzzles.authored(lengthScreenshotDraft());
+  const wrapped = lengthScreenshotWrappedLayout();
+  assert.equal(g.evaluate(level, wrapped).count, 0);
+  assert.ok(Math.abs(g.totalLength(level, wrapped) - 1951.99) < .25);
+
+  const start = optimalLength.start(level, [wrapped]);
+  let lastLength = start.length;
+  const best = optimalLength.refine(level, start, (result) => {
+    assert.equal(g.evaluate(level, g.positions(level, result.state)).count, 0);
+    assert.ok(result.length < lastLength);
+    lastLength = result.length;
+  });
+  assert.equal(g.evaluate(level, g.positions(level, best.state)).count, 0);
+  // The seven-edge loop in the screenshot would cost at least a circumference,
+  // leaving the other 29 edges at their minimum lengths, if it still surrounded the circle.
+  const { nodes: spacing, obstacleGap } = g.clearances(level);
+  assert.ok(best.upper < 29 * spacing + 2 * Math.PI * (level.obstacles[5].r + obstacleGap));
+  assert.ok(best.lower > 1212 && best.lower <= best.upper);
 });
 
 function railDraft(left, right) {

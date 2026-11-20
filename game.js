@@ -109,6 +109,7 @@
   let view = { x: 0, y: 0, zoom: 1 };
   let animation = null;
   let search = null;
+  let previousLengthResult;
   let historyMotion = null;
   let suggestion = null;
   let hover = -1;
@@ -641,10 +642,22 @@
     return `${((performance.now() - started) / 1000).toFixed(2)} 秒`;
   }
 
-  function lengthText({ status, length, lower }) {
-    const down = (Math.floor(lower * 100 + 1e-9) / 100).toFixed(2);
-    return `总线长 ${length.toFixed(2)}，全局下界 ${down}。${status === 'length-proven' ?
-      '已证距全局最短不超过 0.10 棋盘单位。' : '尚未证明最短。'}`;
+  function lengthText({ status, length, lower, upper }) {
+    const down = (Math.floor(lower * 100) / 100).toFixed(2);
+    const gap = upper >= lower ? (Math.ceil((upper - lower) * 100) / 100).toFixed(2) : null;
+    return `当前最短线长 ${length.toFixed(2)}，全局下界 ${down}。${status === 'length-proven' ?
+      '已证距全局最短不超过 0.10 棋盘单位。' :
+      `尚未证明最短。${gap === null ? '' : `最优差距至多 ${gap}。`}`}`;
+  }
+
+  function lengthProblemKey(puzzle) {
+    return JSON.stringify([puzzle.radius ?? g.radius, puzzle.edges, puzzle.obstacles,
+      puzzle.controls.map(({ kind, members, sum, center, a, b }) => [kind, members, sum, center, a, b]),
+      puzzle.points.map((point, i) => {
+        const control = puzzle.controls[puzzle.ownership[i]];
+        return !control || control.kind === 'rotor' ? point : null;
+      }),
+    ]);
   }
 
   function updateSearchClock(job) {
@@ -678,6 +691,8 @@
   }
 
   function requestWitness(puzzle, current, report, onSolved, started = performance.now(), objective) {
+    const lengthKey = objective === 'length' ? lengthProblemKey(puzzle) : null;
+    const previous = lengthKey && lengthKey === previousLengthResult?.key ? previousLengthResult.result : undefined;
     const job = { report, started, objective, onSolved };
     search = job;
     updateSearchClock(job);
@@ -690,6 +705,7 @@
         !g.evaluate(puzzle, g.positions(puzzle, answer)).count;
       if (result.type === 'length-progress') {
         if (!validAnswer()) return;
+        previousLengthResult = { key: lengthKey, result };
         job.progress = result;
         job.clock = null;
         updateSearchClock(job);
@@ -703,7 +719,7 @@
         if (status === 'solved') {
           puzzle.witness = answer;
           puzzle.preserveRepair = preserveRepair === true;
-        }
+        } else previousLengthResult = { key: lengthKey, result };
         report('');
         onSolved(searchTime(job.started), status === 'solved' ? undefined : result);
         return;
@@ -731,10 +747,10 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=21');
+      job.worker = new Worker('./solver-worker.js?v=22');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
-      job.worker.postMessage({ puzzle, current, objective });
+      job.worker.postMessage({ puzzle, current, objective, previous });
     } catch {
       receive({ status: 'unknown' });
     }

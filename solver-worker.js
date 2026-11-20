@@ -2,8 +2,8 @@
 
 importScripts('./engine.js?v=13', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
   './solver-coupled-repair.js?v=2', './solver-repair.js?v=2', './solver-obstacles.js?v=1', './puzzles.js?v=13',
-  './solver-search.js?v=9', './solver-relaxation.js?v=5', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
-  './solver-geometry.js?v=8', './exact-solver.js?v=11', './solver-length.js?v=3');
+  './solver-search.js?v=9', './solver-relaxation.js?v=6', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
+  './solver-geometry.js?v=9', './exact-solver.js?v=11', './solver-length.js?v=4');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');
@@ -22,7 +22,7 @@ async function loadZ3() {
   };
 }
 
-self.onmessage = async ({ data: { puzzle, current, objective } }) => {
+self.onmessage = async ({ data: { puzzle, current, objective, previous } }) => {
   let z3, context;
   async function exactQuery() {
     if (context === undefined) {
@@ -47,7 +47,7 @@ self.onmessage = async ({ data: { puzzle, current, objective } }) => {
       best = next;
       self.postMessage({ type: 'length-progress', ...next });
     };
-    best = start(puzzle, [current, puzzle.witness], progress);
+    best = start(puzzle, [current, puzzle.witness, previous?.state], progress, previous?.lower);
     if (!best) {
       const result = await findWitness();
       if (result.status !== 'solved') {
