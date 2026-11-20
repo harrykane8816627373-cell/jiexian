@@ -7,6 +7,7 @@ const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactSc
   require('./repair-fixture.cjs');
 const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
+const { corridorLevel } = require('./clearance-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
 const parallel = process.argv.includes('--parallel');
@@ -19,10 +20,12 @@ const contactCase = process.argv.includes('--contacts');
 const corridorCase = process.argv.includes('--corridors');
 const breakoutCase = process.argv.includes('--breakout');
 const algebraCase = process.argv.includes('--algebra');
-const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase;
+const neighborhoodCase = process.argv.includes('--neighborhood');
+const fullComparison = contactCase || corridorCase || breakoutCase || algebraCase || neighborhoodCase;
 const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase || corridorCase || breakoutCase;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = breakoutCase || algebraCase ? '6b0f5b4' : corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
+const revision = neighborhoodCase ? '31b340b' : breakoutCase || algebraCase ? '6b0f5b4' :
+  corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' :
   hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
   obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
 const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
@@ -31,7 +34,7 @@ for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-
   'solver-contact-repair.js', 'solver-obstacle-corridors.js', 'puzzles.js', 'solver-search.js', 'solver-tracks.js',
   'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   // Use the same V8 realm in the two isolated subprocesses for the full-pipeline comparison.
-  if (!historicalProcess) require(path.join(repo, name));
+  if (!historicalProcess || neighborhoodCase && name !== 'exact-solver.js') require(path.join(repo, name));
   else if ((breakoutCase || algebraCase || name !== 'solver-obstacle-corridors.js') && (!contactCase || name !== 'solver-contact-repair.js')) {
     runInThisContext(oldScript(name), { filename: name });
   }
@@ -66,7 +69,8 @@ function run(solver, level) {
   let context, checks = 0;
   const start = performance.now();
   try {
-    let problem, seed;
+    let problem;
+    let seed = neighborhoodCase ? level.initial : undefined;
     const search = solver === current ? globalThis.JiexianSolverSearch : sandbox.JiexianSolverSearch;
     if (pipeline && search) {
       const phase = search.search(level, level.initial, solver.prepareExact);
@@ -206,7 +210,10 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = algebraCase ? [
+const cases = neighborhoodCase ? [
+  ['26 nodes around a 0.0002-unit corridor', corridorLevel(g, { halfGap: .0001, shift: .45 }), 9, 1],
+  ['26 nodes around a 0.24-unit corridor', corridorLevel(g, { halfGap: .12, shift: 5 }), 9, 1],
+] : algebraCase ? [
   ['rotating chord blocked one millionth below tangency', rotorChord(g, 26, 1.999999), 9],
   ['rotating chord tangent at its only feasible angle', rotorChord(g, 26, 2), 9],
   ['rotating chord clear at every angle', rotorChord(g, 60, 32), 9],

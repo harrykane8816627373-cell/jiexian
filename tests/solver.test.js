@@ -27,6 +27,7 @@ const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactSc
   require('./repair-fixture.cjs');
 const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
+const { corridorLevel } = require('./clearance-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -74,6 +75,17 @@ for (const draft of portraitDrafts()) {
     for (const i of draft.fixed) assert.deepEqual(points[i], draft.points[i]);
   });
 }
+
+test('node to edge clearance is 16 including exact tangency', () => {
+  const level = (gap) => g.createLevel({ points: [[100, 200], [300, 200], [200, 200 + gap]],
+    edges: [[0, 1]], controls: [] });
+  const tangent = level(16), near = level(15.999);
+  assert.equal(g.clearances(tangent).nodeEdge, 16);
+  assert.equal(g.evaluate(tangent, tangent.points).count, 0);
+  assert.equal(prepareExact(tangent).status, 'solved');
+  assert.equal(g.evaluate(near, near.points).count, 1);
+  assert.equal(prepareExact(near).status, 'unsat');
+});
 
 test('global search finds a 0.002-unit rail interval missed by the local search', () => {
   const level = puzzles.solveDraft(railDraft(283.124, 349.126)).puzzle;
@@ -266,11 +278,14 @@ test('the Gram segment predicate handles both types of tangency and zero-length 
     [[-4, 0], [-6, 2], 4.000001, 'unsat'],
     [[4, 0], [4, 0], 4, 'solved'],
     [[4, 0], [4, 0], 4.000001, 'unsat'],
+    [[1, 0], [10, 0], 3, 'unsat', [[0, 2], [1, 2]]],
   ];
-  for (const [a, b, distance, expected] of cases) {
+  for (const [a, b, distance, expected, pairs = []] of cases) {
     const context = init();
     try {
-      const part = { controls: [], records: [{ kind: 'segment', vertices: [0, 1, 2], distance, support: [] }] };
+      const records = pairs.map((vertices) => ({ kind: 'distance', vertices, distance, support: [] }));
+      records.push({ kind: 'segment', vertices: [0, 1, 2], distance, support: [] });
+      const part = { controls: [], records };
       const problem = { status: 'ready', coordinates: [a, b, [0, 0]],
         railBounds: [], parts: [part], retryParts: [], state: [] };
       assert.equal(solveExact(level, (command) => ask(context, command), problem).status, expected);
@@ -419,7 +434,7 @@ test('screenshot reconstruction uses two verified moves and keeps the other twel
   const level = puzzles.authored(screenshotDraft());
   const conflicts = [];
   const faults = g.evaluate(level, level.points, (nodes) => conflicts.push(nodes));
-  assert.equal(faults.count, 3);
+  assert.equal(faults.count, 2);
   assert.equal(conflicts.length, faults.count);
   assert.ok(conflicts.every((nodes) => nodes.includes(7)));
   const answer = repair(level, level.initial);
@@ -427,9 +442,9 @@ test('screenshot reconstruction uses two verified moves and keeps the other twel
   assert.equal(answer.preserveRepair, true);
   assert.equal(g.evaluate(level, g.positions(level, answer.state)).count, 0);
   const changed = answer.state.flatMap((value, i) => g.distance(value, level.initial[i]) ? [i + 1] : []);
-  assert.deepEqual(changed, [6, 8]);
+  assert.deepEqual(changed, [2, 6]);
   const plan = g.solve({ ...level, witness: answer.state, preserveRepair: answer.preserveRepair }, level.initial);
-  assert.deepEqual(plan.map(({ index }) => index + 1).sort((a, b) => a - b), [6, 8]);
+  assert.deepEqual(plan.map(({ index }) => index + 1).sort((a, b) => a - b), changed);
   const replay = g.copy(level.initial);
   for (const { index, value } of plan) replay[index] = value;
   assert.equal(g.evaluate(level, g.positions(level, replay)).count, 0);
@@ -440,7 +455,6 @@ test('repairing the screenshot edge recruits a green vertex to clear the neighbo
   const initial = [];
   g.evaluate(level, level.points, (nodes, kind, obstacle) => initial.push([nodes, kind, obstacle]));
   assert.deepEqual(initial, [[[1, 4], 'edge-obstacle', 0]]);
-  assert.equal(repair(level, level.initial), null);
   const answer = repairTogether(level, level.initial);
   checkSolution(level, answer);
   const plan = g.solve({ ...level, witness: answer.state, preserveRepair: answer.preserveRepair }, level.initial);
@@ -505,7 +519,7 @@ test('contact repair solves 60 perturbed eight-disk layouts, including contacts 
 });
 
 test('a geometric sweep can finish the last conflict after contact repair stalls', () => {
-  const level = puzzles.authored(perturbedContactDraft(21, 5));
+  const level = puzzles.authored(perturbedContactDraft(2, 6));
   let unresolved = Infinity;
   const direct = globalThis.JiexianContactRepair.repair(level, level.initial, {
     offer: (_, count) => { unresolved = count; },
@@ -633,11 +647,12 @@ test('the exact solver fixes a seeded rail conflict with the other control froze
 });
 
 test('an impossible frozen neighborhood falls through to a solution with both controls movable', () => {
-  const points = [[240, 270], [300, 270], [240, 270]];
-  const level = g.createLevel({ points, edges: [], controls: [
-    g.rail(0, [240, 270], [300, 270], 0), g.free(1, points[1]),
+  const points = [[240, 270], [300, 270], [240, 270], [700, 430], [740, 430]];
+  const level = g.createLevel({ points, edges: [], obstacles: [{ center: [450, 450], r: 24 }], controls: [
+    g.rail(0, [240, 270], [300, 270], 0), g.free(1, points[1]), g.free(3, points[3]), g.free(4, points[4]),
   ] });
   const problem = prepareExact(level);
+  assert.equal(problem.status, 'ready');
   const context = init();
   const checks = [];
   try {
@@ -650,6 +665,28 @@ test('an impossible frozen neighborhood falls through to a solution with both co
     assert.equal(checks[0], 'unsat');
     assert.ok(checks.includes('sat'));
     assert.notDeepEqual(result.state[1], points[1]);
+  } finally {
+    destroy(context);
+  }
+});
+
+test('one active control solves a very narrow obstacle corridor in a 26-node part', () => {
+  const level = corridorLevel(g, { halfGap: .0001, shift: .45 });
+  assert.equal(g.evaluate(level, level.points).count, 1);
+  const problem = prepareExact(level);
+  assert.equal(problem.parts[0].controls.length, 26);
+  const context = init();
+  let variables = 0, checks = 0;
+  try {
+    const result = solveExact(level, (command) => {
+      variables += [...command.matchAll(/\(declare-const /g)].length;
+      if (command === '(check-sat-using qfnra-nlsat)') checks++;
+      return ask(context, command);
+    }, problem, level.initial);
+    checkSolution(level, result);
+    assert.equal(variables, 2);
+    assert.equal(checks, 1);
+    assert.deepEqual(result.state.slice(1), level.initial.slice(1));
   } finally {
     destroy(context);
   }

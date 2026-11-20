@@ -95,15 +95,21 @@
     };
     const pick = (values) => values[Math.floor(random() * values.length)];
     const budget = { remaining: restartBudget * restarts };
-    const search = { records, incident, unit, random, budget, normalize };
+    // Alternate the node-to-edge clearance used for scoring to explore a
+    // different neighborhood. Witnesses always use the engine clearance.
+    const guidanceClearance = (level.radius ?? g.radius) * (19 / 14);
+    const wider = records.map((record) => record.kind === 'segment' && record.vertices[2] < level.points.length ?
+      { ...record, distance: guidanceClearance } : record);
     let bestEstimate = fewest;
     for (let restart = 0; restart < restarts && budget.remaining > 0; restart++) {
+      const activeRecords = restart % 4 >= 2 ? wider : records;
+      const search = { records: activeRecords, incident, unit, random, budget, normalize };
       const start = restart % 2 ? current : candidate;
       const state = start.map((value, i) => normalize(i, restart < 4 ? value :
         value.map((x) => x + (random() - .5) * 12 * unit[i])));
       const points = [...g.positions(level, state), ...problem.coordinates.slice(level.points.length)];
       const weights = records.map(() => 1);
-      const depths = records.map((record) => depth(record, points));
+      const depths = activeRecords.map((record) => depth(record, points));
       const violations = new Set(depths.flatMap((value, i) => value ? [i] : []));
       const pose = { state, points, depths, weights, violations };
       const stop = Math.max(0, budget.remaining - restartBudget);

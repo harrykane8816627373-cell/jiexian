@@ -1,9 +1,9 @@
 'use strict';
 
-importScripts('./engine.js?v=10', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
+importScripts('./engine.js?v=11', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
   './solver-coupled-repair.js?v=2', './solver-repair.js?v=2', './solver-obstacles.js?v=1', './puzzles.js?v=13',
-  './solver-search.js?v=4', './solver-breakout.js?v=1', './solver-tracks.js?v=1', './solver-regions.js?v=1',
-  './solver-geometry.js?v=4', './exact-solver.js?v=6');
+  './solver-search.js?v=4', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
+  './solver-geometry.js?v=4', './exact-solver.js?v=7');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');

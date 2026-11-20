@@ -20,7 +20,7 @@
   const rail = (node, a, b, start) => ({ kind: 'rail', members: [node], a, b, start: [start] });
   const clearances = (level) => {
     const spacing = level.radius ?? radius;
-    return { nodes: spacing * (33 / 14), nodeEdge: spacing * (19 / 14), spacing, obstacleGap: 4 };
+    return { nodes: spacing * (33 / 14), nodeEdge: spacing * (16 / 14), spacing, obstacleGap: 4 };
   };
   const orientation = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
   const opposite = (a, b) => (a < 0 && b > 0) || (a > 0 && b < 0);

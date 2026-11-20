@@ -26,16 +26,19 @@
     return value < 0 ? call('-', decimal) : decimal;
   }
 
-  function segmentClear(p, a, b, distance) {
+  function segmentClear(p, a, b, distance, checkA, checkB) {
     const ab = vector(b, a);
     const ap = vector(p, a);
     const bp = vector(p, b);
     const limit = square(real(distance));
     // Copositivity of the two-endpoint quadratic form. Use the 2D Gram identity
     // for its determinant, which also covers coincident endpoints without a division.
-    return and(call('>=', normSquared(ap), limit), call('>=', normSquared(bp), limit),
-      or(call('>=', dot(ap, bp), limit),
-        call('>=', square(cross(ab, ap)), mul(limit, normSquared(ab)))));
+    const endpoints = [];
+    if (checkA) endpoints.push(call('>=', normSquared(ap), limit));
+    if (checkB) endpoints.push(call('>=', normSquared(bp), limit));
+    const middle = or(call('>=', dot(ap, bp), limit),
+      call('>=', square(cross(ab, ap)), mul(limit, normSquared(ab))));
+    return endpoints.length ? and(...endpoints, middle) : middle;
   }
 
   function sameSide(a, b, c, d) {
@@ -94,14 +97,27 @@
         assert(or(...cut.boxes.map((box) => and(...box.flatMap(([lo, hi], axis) =>
           [call('<=', fraction([lo, cut.scale]), names[axis]), call('<=', names[axis], fraction([hi, cut.scale]))])))));
       }
+      const neighborhood = part.neighborhood?.get(i);
+      if (neighborhood) {
+        neighborhood.forEach(([lo, hi], axis) => bounded(names[axis], real(lo), real(hi)));
+      }
       return { index: i, names };
     });
 
+    const pair = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
+    const separation = new Map();
+    for (const { kind, vertices: [a, b], distance } of part.records) {
+      if (kind !== 'distance') continue;
+      const key = pair(a, b);
+      separation.set(key, Math.max(distance, separation.get(key) ?? 0));
+    }
+    const checksEndpoint = (a, p, gap) => (separation.get(pair(a, p)) ?? 0) < gap;
     const constraints = part.records.map((record, i) => {
       const { kind, vertices, distance, support } = record;
       const [a, b, c, d] = vertices.map((node) => points[node]);
       const formula = kind === 'distance' ? call('>=', normSquared(vector(a, b)), square(real(distance))) :
-        kind === 'segment' ? segmentClear(c, a, b, distance) : or(sameSide(a, b, c, d), sameSide(c, d, a, b));
+        kind === 'segment' ? segmentClear(c, a, b, distance, checksEndpoint(vertices[0], vertices[2], distance),
+          checksEndpoint(vertices[1], vertices[2], distance)) : or(sameSide(a, b, c, d), sameSide(c, d, a, b));
       return { name: define(`clear${i}`, 'Bool', formula), unary: support.length === 1, record };
     });
     return { setup, constraints, controls };
@@ -185,6 +201,54 @@
     return failed;
   }
 
+  function smallestSupports(conflicts, required) {
+    const choices = [];
+    const seen = new Set();
+    function visit(active) {
+      const key = [...active].sort((a, b) => a - b).join(',');
+      if (seen.has(key)) return;
+      seen.add(key);
+      const hit = conflicts.find(({ support }) => !support.some((i) => active.has(i)));
+      if (!hit) choices.push(active);
+      else if (active.size < 2) for (const i of hit.support) visit(new Set([...active, i]));
+    }
+    visit(new Set(required));
+    return choices.sort((a, b) => a.size - b.size);
+  }
+
+  function restrictedPart(level, part, active, pose, points, radius) {
+    const controls = part.controls.filter((i) => active.has(i));
+    const neighborhood = new Map(), motion = new Map();
+    if (radius) {
+      for (const i of controls) {
+        const { kind, a, b } = level.controls[i];
+        if (kind === 'rotor') return null;
+        const delta = kind === 'rail' ? radius / g.distance(a, b) : radius;
+        if (!Number.isFinite(delta)) return null;
+        const bounds = pose[i].map((value) => [value - delta, value + delta]);
+        neighborhood.set(i, bounds);
+        motion.set(i, kind === 'rail' ? radius : Math.SQRT2 * radius);
+      }
+    }
+    function safelyFar({ kind, vertices, distance }) {
+      const [a, b, c, d] = vertices.map((i) => points[i]);
+      const [moveA, moveB, moveC, moveD] = vertices.map((i) => motion.get(level.ownership[i]) ?? 0);
+      // Distance between compact sets is 1-Lipschitz in the Hausdorff distance of each set.
+      // For a segment the Hausdorff displacement is bounded by the larger endpoint displacement.
+      if (kind === 'distance') return g.distance(a, b) > distance + moveA + moveB + 1e-6;
+      const extent = Math.max(moveA, moveB) + (kind === 'segment' ? moveC : Math.max(moveC, moveD)) + 1e-6;
+      if (kind === 'segment') return g.distanceToSegment(c, a, b) > distance + extent;
+      return !g.segmentsCross(a, b, c, d) &&
+        Math.min(g.distanceToSegment(a, c, d), g.distanceToSegment(b, c, d),
+          g.distanceToSegment(c, a, b), g.distanceToSegment(d, a, b)) > extent;
+    }
+    const records = part.records.flatMap((record) => {
+      const support = record.support.filter((i) => active.has(i));
+      return support.length && (!radius || !safelyFar(record)) ? [{ ...record, support }] : [];
+    });
+    return { ...part, controls, records, neighborhood };
+  }
+
   function prepareExact(level, current = level.initial) {
     const problem = analyze(level);
     if (problem.unsat) return { status: 'unsat' };
@@ -230,19 +294,31 @@
       // A small exact repair is useful when the heuristic has left nearly all controls in a good place.
       // The unrestricted problem below still decides every failure of this restricted attempt.
       let attempts = 0;
+      let smallAttempts = 0;
       for (const part of parts) {
         if (attempts >= 3) break;
         const failed = violations(part, seedPoints);
-        const active = new Set([...outside(part), ...failed.flatMap(({ support }) => support)]);
+        const required = outside(part);
+        const active = new Set([...required, ...failed.flatMap(({ support }) => support)]);
+        const frozenPoints = (selected) => coordinates.map((point, i) =>
+          selected.has(level.ownership[i]) ? point : seedPoints[i]);
+        if (level.obstacles.length && failed.length && failed.length <= 8 && required.length <= 2) {
+          // Every current conflict must lose at least one frozen control. This
+          // branch looks for a witness only, even when every small support fails.
+          for (const selected of smallestSupports(failed, required)) {
+            if (smallAttempts >= 4) break;
+            const local = restrictedPart(level, part, selected, trial, seedPoints, 30);
+            if (!local) continue;
+            smallAttempts++;
+            const proposed = g.copy(trial);
+            if (solve(local, frozenPoints(selected), proposed, null, true) !== 'sat') continue;
+            if (playable(level, proposed)) return { status: 'solved', state: proposed, preserveRepair: true };
+          }
+        }
         if (!active.size || active.size > 6 || active.size === part.controls.length) continue;
         attempts++;
-        const controls = part.controls.filter((i) => active.has(i));
-        const records = part.records.flatMap((record) => {
-          const support = record.support.filter((i) => active.has(i));
-          return support.length ? [{ ...record, support }] : [];
-        });
-        const frozen = coordinates.map((point, i) => active.has(level.ownership[i]) ? point : seedPoints[i]);
-        const result = solve({ ...part, controls, records }, frozen, trial, null, true);
+        const local = restrictedPart(level, part, active, trial, seedPoints);
+        const result = solve(local, frozenPoints(active), trial, null, true);
         if (result === 'sat') seedPoints = positions();
       }
       if (playable(level, trial)) return { status: 'solved', state: trial, preserveRepair: true };
