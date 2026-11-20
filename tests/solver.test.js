@@ -29,7 +29,7 @@ const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactSc
 const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
-const { crossingScreenshotDraft } = require('./crossing-fixture.cjs');
+const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -96,6 +96,31 @@ test('the screenshot with a single crossed edge pair has a fully checked solutio
   assert.deepEqual(faults, [{ nodes: [16, 18, 9, 13], kind: 'crossing' }]);
   const result = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
   checkSolution(level, result);
+});
+
+test('a crossing and a nearby node-edge conflict solve together before Z3', () => {
+  const level = puzzles.authored(crossingAndClearanceScreenshotDraft());
+  const faults = [];
+  g.evaluate(level, level.points, (nodes, kind) => faults.push({ nodes, kind }));
+  assert.deepEqual(faults, [
+    { nodes: [9, 13, 16], kind: 'node-edge' },
+    { nodes: [16, 18, 9, 13], kind: 'crossing' },
+  ]);
+  checkSolution(level, globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact));
+});
+
+test('global reembedding accepts changes to the obstacle geometry and vertex order', () => {
+  const draft = crossingAndClearanceScreenshotDraft();
+  const n = draft.points.length;
+  for (const shift of [-4, 2, 5]) {
+    const level = puzzles.authored({
+      points: [...draft.points].reverse(),
+      edges: [...draft.edges].reverse().map(([a, b]) => [n - b - 1, n - a - 1]),
+      obstacles: draft.obstacles.map(({ center: [x, y], r }) => ({ center: [x + shift, y - shift], r: r + shift / 2 })),
+    });
+    assert.ok(g.evaluate(level, level.points).count > 0);
+    checkSolution(level, globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact));
+  }
 });
 
 test('global search finds a 0.002-unit rail interval missed by the local search', () => {
