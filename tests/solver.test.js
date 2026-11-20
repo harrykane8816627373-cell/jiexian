@@ -276,6 +276,47 @@ test('adding a wire to node 19 can reembed the drawing between two banks of obst
   }
 });
 
+test('wire 19–12 searches the corridor before expensive repairs even when the drawing order changes', (t) => {
+  const draft = node19Draft();
+  draft.edges.push([11, 18]);
+  draft.points[18] = [440.59, 281.46];
+  const find = (input) => {
+    const { puzzle } = puzzles.solveDraft(input);
+    const answer = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+    checkSolution(puzzle, answer);
+    return answer.state;
+  };
+  t.mock.method(globalThis.JiexianSolverRelaxation, 'repair', () => assert.fail('unexpected long local repair'));
+  const answer = find(draft);
+  assert.deepEqual(find({ ...draft, edges: [...draft.edges].reverse() }), answer);
+  let seed = 5;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
+  const points = draft.points.map(() => [g.margin + random() * (g.width - 2 * g.margin),
+    g.margin + random() * (g.height - 2 * g.margin)]);
+  find({ ...draft, points });
+});
+
+test('wire 19–12 clears perturbed obstacles at their original radii', (t) => {
+  const draft = node19Draft();
+  draft.edges.push([11, 18]);
+  let seed = 25;
+  function jitter(point, amplitude) {
+    return point.map((value, axis) => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return g.clamp(value + amplitude * (seed / 2 ** 32 - .5), g.margin,
+        (axis === 0 ? g.width : g.height) - g.margin);
+    });
+  }
+  draft.points = draft.points.map((point) => jitter(point, 16));
+  draft.obstacles = draft.obstacles.map((disk) => ({ ...disk, center: jitter(disk.center, 32) }));
+  const { puzzle } = puzzles.solveDraft(draft);
+  t.mock.method(globalThis.JiexianSolverRelaxation, 'repair', () => assert.fail('unexpected long local repair'));
+  checkSolution(puzzle, globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact));
+});
+
 for (const target of [27, 29]) {
   test(`blocked wire 6–${target} can fit the portrait drawing along a wall`, () => {
     const { puzzle } = puzzles.solveDraft(blockedPortraitDraft(target));

@@ -38,6 +38,14 @@
     const problem = prepare?.(puzzle, current);
     if (problem?.status === 'solved' || problem?.status === 'unsat') return problem;
     const relaxation = globalThis.JiexianSolverRelaxation;
+    if (reembed && problem?.status === 'ready') {
+      // Several crossed wires can trap repairs that start from the current layout.
+      const crossings = initial.filter(({ kind }) => kind === 'crossing');
+      if (crossings.length >= 5 || initial.length >= puzzle.points.length) {
+        const corridor = relaxation?.findCorridor(puzzle, crossings);
+        if (corridor) return corridor;
+      }
+    }
     const relax = relaxation?.repair;
     const previousSeed = candidate;
     if (reembed || relaxContacts) {

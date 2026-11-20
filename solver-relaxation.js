@@ -435,7 +435,7 @@
     return frames;
   }
 
-  function bandSeeds(drawings, frames, records, obstacles) {
+  function bandSeeds(drawings, frames, records, obstacles, perDrawing = 8) {
     const starts = [];
     for (const drawing of drawings) {
       const ranked = [];
@@ -445,30 +445,101 @@
           const extent = drawingBounds(shape);
           for (const frame of frames) {
             const points = fitDrawing(shape, extent, frame);
-            const limit = ranked[7]?.cost ?? Infinity;
+            const limit = ranked[perDrawing - 1]?.cost ?? Infinity;
             const cost = residuals(records, [...points, ...obstacles], undefined, limit);
             if (cost >= limit) continue;
             ranked.push({ points, cost });
             ranked.sort((a, b) => a.cost - b.cost);
-            if (ranked.length > 8) ranked.pop();
+            if (ranked.length > perDrawing) ranked.pop();
           }
         }
       }
       starts.push(...ranked);
     }
-    return starts.sort((a, b) => a.cost - b.cost).slice(0, 48);
+    return starts.sort((a, b) => a.cost - b.cost);
+  }
+
+  function polishBand(level, records, obstacles, points) {
+    let best = points;
+    polishLength(level, records, obstacles, points, (candidate) => { best = candidate; });
+    return best;
+  }
+
+  function repairBandStarts(level, records, obstacles, starts) {
+    for (const { points } of starts) {
+      const result = improve(level, records, obstacles, points, 150);
+      if (!result.count) return polishBand(level, records, obstacles, result.points);
+    }
+    return null;
   }
 
   function repairBand(level, drawings, frames, records, obstacles, rankingRecords = records) {
     if (!frames.length || !drawings?.length) return null;
-    for (const { points } of bandSeeds(drawings, frames, rankingRecords, obstacles)) {
-      const result = improve(level, records, obstacles, points, 150);
-      if (result.count) continue;
-      let best = result.points;
-      polishLength(level, records, obstacles, best, (candidate) => { best = candidate; });
-      return best;
+    const starts = bandSeeds(drawings, frames, rankingRecords, obstacles).slice(0, 48);
+    return repairBandStarts(level, records, obstacles, starts);
+  }
+
+  function growBand(level, records, centers, starts) {
+    const count = level.points.length;
+    // Make space for the planar drawing first. Then restore the original
+    // circles in smaller steps so the nearest contacts can move together.
+    const stages = [.65, .75, .85, .925, .975].map((ratio) => {
+      const obstacles = level.obstacles.map((disk) => ({ ...disk, r: disk.r * ratio }));
+      const resized = records.map((record) => {
+        const disk = record.vertices.find((node) => node >= count);
+        if (disk === undefined) return record;
+        const i = disk - count;
+        return { ...record, distance: record.distance - (level.obstacles[i].r - obstacles[i].r) };
+      });
+      return { level: { ...level, obstacles }, records: resized };
+    });
+    stages.push({ level, records });
+    for (const start of starts) {
+      let result = start;
+      for (const stage of stages) {
+        result = improve(stage.level, stage.records, centers, result.points, 80);
+        if (result.count) break;
+      }
+      if (!result.count) return polishBand(level, records, centers, result.points);
     }
     return null;
+  }
+
+  function corridorEdges(level, crossings) {
+    const count = level.points.length;
+    const key = ([a, b]) => Math.min(a, b) * count + Math.max(a, b);
+    const contacts = new Map();
+    for (const { nodes } of crossings) {
+      for (const edge of [nodes.slice(0, 2), nodes.slice(2)]) {
+        const index = key(edge);
+        contacts.set(index, (contacts.get(index) ?? 0) + 1);
+      }
+    }
+    // Build the embedding in a reproducible order. If one wire accounts for
+    // most crossings, let the other wires determine the traversal first.
+    const last = [...contacts].filter(([, hits]) => hits >= 4 && hits * 4 >= crossings.length * 3)
+      .sort(([a, hitsA], [b, hitsB]) => hitsB - hitsA || a - b)[0]?.[0];
+    return level.edges.map(([a, b]) => [Math.min(a, b), Math.max(a, b)])
+      .sort((a, b) => Number(key(a) === last) - Number(key(b) === last) || key(a) - key(b));
+  }
+
+  function findCorridor(level, crossings) {
+    const bands = interiorBands(level);
+    if (!bands.length) return null;
+    const edges = corridorEdges(level, crossings);
+    const ordered = { ...level, edges };
+    const drawings = globalThis.JiexianDrawing(level.points.length, edges);
+    if (!drawings?.length) return null;
+    const geometry = globalThis.JiexianSolverGeometry.analyze(ordered, { forLength: true });
+    if (geometry.unsat) return null;
+    const { part: { records }, coordinates } = geometry;
+    const obstacles = coordinates.slice(level.points.length);
+    const distanceRecords = records.filter(({ kind }) => kind !== 'crossing');
+    const starts = bandSeeds(drawings, bands, distanceRecords, obstacles, 12).slice(0, 24);
+    const points = repairBandStarts(ordered, records, obstacles, starts.slice(0, 6)) ??
+      growBand(ordered, records, obstacles, starts);
+    if (!points) return null;
+    return { status: 'solved', state: level.controls.map(({ members: [i] }) => points[i]), preserveRepair: true };
   }
 
   function repair(level, problem, { starts = [], reembed = true, useBoundaryBands = false, restarts = 36, offer } = {}) {
@@ -733,5 +804,5 @@
     return result;
   }
 
-  globalThis.JiexianSolverRelaxation = { repair, repairSplit, compact, findCompact, supportsCompact };
+  globalThis.JiexianSolverRelaxation = { repair, repairSplit, findCorridor, compact, findCompact, supportsCompact };
 })();
