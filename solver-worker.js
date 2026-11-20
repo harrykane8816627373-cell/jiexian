@@ -1,7 +1,7 @@
 'use strict';
 
-importScripts('./engine.js?v=9', './planarity.js?v=3', './solver-coupled-repair.js?v=2', './solver-repair.js?v=1',
-  './solver-obstacles.js?v=1', './puzzles.js?v=13', './solver-search.js?v=1', './solver-tracks.js?v=1', './solver-regions.js?v=1',
+importScripts('./engine.js?v=10', './planarity.js?v=3', './solver-contact-repair.js?v=1', './solver-coupled-repair.js?v=2',
+  './solver-repair.js?v=2', './solver-obstacles.js?v=1', './puzzles.js?v=13', './solver-search.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
   './solver-geometry.js?v=3', './exact-solver.js?v=4');
 
 async function loadZ3() {

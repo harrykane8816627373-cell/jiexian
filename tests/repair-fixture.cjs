@@ -37,4 +37,35 @@ function mixedScreenshotDraft() {
   return draft;
 }
 
-module.exports = { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft };
+// Approximate layout of the 27-node screenshot. Circle two is just clear of node 14.
+function contactScreenshotDraft() {
+  const world = ([x, y]) => [
+    Math.min(858, Math.max(42, 24 + (x - 153) * 852 / 1090)),
+    Math.min(498, Math.max(42, 24 + (y - 181.25) * 492 / 630)),
+  ];
+  const points = [[529.1, 788.3], [345.3, 320.8], [967.3, 619.1], [1036.1, 694.6], [797.3, 788.3], [497.5, 646.7],
+    [446.1, 204.4], [742.4, 267.3], [881.7, 650.5], [566.3, 725.1], [702.6, 717.9], [176.2, 337.9], [340.4, 583.1],
+    [539.8, 261.9], [234.1, 631], [195.6, 785], [176.1, 568.7], [330.2, 662.3], [1147.2, 614.9], [635.8, 748.3],
+    [1197.5, 518.9], [1070.7, 545.2], [972, 375], [873.3, 312], [1016.7, 445.5], [381, 722.9], [487.3, 722.9]].map(world);
+  const edges = [[1, 16], [1, 5], [1, 10], [1, 27], [2, 12], [2, 7], [3, 8], [3, 4], [3, 9], [3, 13], [4, 5], [4, 19],
+    [5, 9], [5, 11], [6, 9], [6, 13], [6, 18], [6, 26], [6, 11], [6, 10], [7, 14], [8, 14], [8, 24], [10, 20], [12, 13],
+    [13, 15], [13, 17], [15, 17], [15, 16], [15, 18], [19, 21], [19, 22], [21, 25], [23, 24], [23, 25], [26, 27]]
+    .map(([a, b]) => [a - 1, b - 1]);
+  const obstacles = [[368.1, 445.7, 89.2], [527.1, 354.3, 69.59], [712.5, 393, 78.6], [489.1, 523.2, 63],
+    [634.8, 514.5, 68.8], [795.8, 520.2, 60.5], [272.1, 707.1, 50.2], [352.2, 691.6, 67.8]]
+    .map(([x, y, radius]) => ({ center: world([x, y]), r: radius * 852 / 1090 }));
+  return { points, edges, obstacles };
+}
+
+function perturbedContactDraft(sample, amount) {
+  const draft = contactScreenshotDraft();
+  const points = draft.points.map((point, i) => point.map((value, axis) =>
+    Math.min(axis ? 498 : 858, Math.max(42, value + amount * Math.sin(sample * 31 + i * 47 + axis * 11)))));
+  const obstacles = draft.obstacles.map(({ center, r }, i) => ({
+    center: center.map((value, axis) => value + .7 * amount * Math.cos(sample * 47 + i * 97 + axis * 3)),
+    r: r + .5 * amount * Math.sin(sample * 7 + i * 61),
+  }));
+  return { ...draft, points, obstacles };
+}
+
+module.exports = { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft };

@@ -8,6 +8,7 @@ require('../planarity.js');
 require('../solver-obstacles.js');
 require('../solver-repair.js');
 require('../solver-coupled-repair.js');
+require('../solver-contact-repair.js');
 require('../puzzles.js');
 require('../solver-search.js');
 require('../solver-tracks.js');
@@ -20,7 +21,8 @@ const puzzles = globalThis.JiexianPuzzles;
 const { prepareExact, solveExact } = globalThis.JiexianExact;
 const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
-const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft } = require('./repair-fixture.cjs');
+const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft } =
+  require('./repair-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -414,6 +416,63 @@ test('a mixed obstacle, crossing and node-edge conflict stays in fast joint repa
   const result = globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail('unexpected exact phase'));
   checkSolution(level, result);
   assert.equal(result.preserveRepair, true);
+});
+
+test('the 27-node screenshot repairs six contacts at one disk before exact preprocessing', () => {
+  const level = puzzles.authored(contactScreenshotDraft());
+  const initial = [];
+  g.evaluate(level, level.points, (nodes, kind, disk) => initial.push([kind, nodes.map((i) => i + 1), disk]));
+  assert.deepEqual(initial, [
+    ['node-obstacle', [18], 7], ['node-obstacle', [26], 7], ['edge-obstacle', [6, 18], 7],
+    ['edge-obstacle', [6, 26], 7], ['edge-obstacle', [15, 18], 7], ['edge-obstacle', [26, 27], 7],
+  ]);
+  const result = globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail('unexpected exact phase'));
+  checkSolution(level, result);
+  assert.equal(result.preserveRepair, true);
+  assert.deepEqual(result.state[26], level.initial[26]);
+});
+
+test('contact repair solves 60 perturbed eight-disk layouts, including contacts on several disks', () => {
+  let severalDisks = false;
+  for (let sample = 0; sample < 60; sample++) {
+    const level = puzzles.authored(perturbedContactDraft(sample, 3));
+    severalDisks ||= g.evaluate(level, level.points).badObstacles.size > 1;
+    const result = globalThis.JiexianContactRepair.repair(level, level.initial);
+    assert.equal(result?.status, 'solved', `perturbation ${sample}`);
+    assert.equal(g.evaluate(level, g.positions(level, result.state)).count, 0);
+  }
+  assert.ok(severalDisks);
+});
+
+test('a geometric sweep can finish the last conflict after contact repair stalls', () => {
+  const level = puzzles.authored(perturbedContactDraft(21, 5));
+  let unresolved = Infinity;
+  const direct = globalThis.JiexianContactRepair.repair(level, level.initial, {
+    offer: (_, count) => { unresolved = count; },
+  });
+  assert.equal(direct, null);
+  assert.equal(unresolved, 1);
+  checkSolution(level, globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail('unexpected exact phase')));
+});
+
+test('contact corrections move mirror partners, rail sliders and rotor members through their controls', () => {
+  const points = [[180, 190], [250, 190], [450, 190], [560, 350], [620, 305], [820, 450]];
+  const center = [560, 305];
+  const level = g.createLevel({
+    points, edges: [],
+    obstacles: [{ center: [180, 176], r: 24 }, { center: [438, 190], r: 24 }, { center: [545, 350], r: 24 }],
+    controls: [g.mirror(0, 1, points[0]), g.rail(2, [330, 190], [600, 190], 120 / 270), g.rotor([3, 4], center, 0)],
+  });
+  assert.equal(g.evaluate(level, g.positions(level, level.initial)).count, 3);
+  const result = globalThis.JiexianContactRepair.repair(level, level.initial);
+  checkSolution(level, result);
+  const moved = g.positions(level, result.state);
+  assert.ok(result.state.every((value, i) => g.moveDistance(level.controls[i], value, level.initial[i]) > 0));
+  assert.deepEqual(moved[0].map((value, i) => value + moved[1][i]), level.controls[0].sum);
+  assert.equal(moved[2][1], 190);
+  assert.ok(Math.abs(g.distance(moved[3], center) - g.distance(points[3], center)) < 1e-8);
+  assert.ok(Math.abs(g.distance(moved[4], center) - g.distance(points[4], center)) < 1e-8);
+  assert.deepEqual(moved[5], points[5]);
 });
 
 test('contracted rail bounds feed a narrow mixed puzzle back into the fast search', () => {

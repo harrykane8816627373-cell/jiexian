@@ -69,34 +69,35 @@
     });
   }
 
+  function placeControl(level, control, value, result) {
+    const [node, partner] = control.members;
+    switch (control.kind) {
+      case 'rotor': {
+        const [cx, cy] = control.center;
+        const cos = Math.cos(value[0]);
+        const sin = Math.sin(value[0]);
+        for (const member of control.members) {
+          const x = level.points[member][0] - cx;
+          const y = level.points[member][1] - cy;
+          result[member] = [cx + x * cos - y * sin, cy + x * sin + y * cos];
+        }
+        break;
+      }
+      case 'mirror':
+        result[partner] = control.sum.map((sum, axis) => sum - value[axis]);
+        result[node] = value;
+        break;
+      case 'rail':
+        result[node] = interpolate(control.a, control.b, value[0]);
+        break;
+      default:
+        result[node] = value;
+    }
+  }
+
   function positions(level, state) {
     const result = [...level.points];
-    level.controls.forEach((control, i) => {
-      const [node, partner] = control.members;
-      const value = state[i];
-      switch (control.kind) {
-        case 'rotor': {
-          const [cx, cy] = control.center;
-          const cos = Math.cos(value[0]);
-          const sin = Math.sin(value[0]);
-          for (const member of control.members) {
-            const x = level.points[member][0] - cx;
-            const y = level.points[member][1] - cy;
-            result[member] = [cx + x * cos - y * sin, cy + x * sin + y * cos];
-          }
-          break;
-        }
-        case 'mirror':
-          result[partner] = control.sum.map((sum, axis) => sum - value[axis]);
-          result[node] = value;
-          break;
-        case 'rail':
-          result[node] = interpolate(control.a, control.b, value[0]);
-          break;
-        default:
-          result[node] = value;
-      }
-    });
+    level.controls.forEach((control, i) => placeControl(level, control, state[i], result));
     return result;
   }
 
@@ -310,6 +311,6 @@
   }
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
-    positions, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
+    positions, placeControl, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
     trackPosition, interpolate, layoutPenalty, clearances, segmentsCross };
 })();

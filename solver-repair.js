@@ -198,14 +198,14 @@
     return { state, points, count, ranked, motion };
   }
 
-  function repair(level, current) {
+  function repair(level, current, { depthLimit = 3 } = {}) {
     const first = inspect(level, current);
     if (!first.count) return { status: 'solved', state: current };
     if (first.count > 12 || !first.ranked.length) return null;
     let beam = [first], scans = 0;
     const budget = { remaining: 85_000 };
     const visited = new Set();
-    for (let depth = 0; depth < 3 && beam.length; depth++) {
+    for (let depth = 0; depth < depthLimit && beam.length; depth++) {
       const next = [];
       for (const candidate of beam) {
         for (const node of candidate.ranked.slice(0, depth === 0 ? 3 : 2)) {
