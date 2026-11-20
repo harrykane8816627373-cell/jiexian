@@ -22,8 +22,9 @@
       puzzle.controls.length === puzzle.points.length && puzzle.controls.every(({ kind }) => kind === 'free');
     const reembed = freeObstacleLayout && initial.some(({ kind }) => kind === 'crossing');
     const blocked = freeObstacleLayout ? initial.filter(({ kind }) => kind === 'edge-obstacle') : [];
+    const mixedCrossing = reembed && blocked.length > 0;
     const relaxContacts = blocked.length >= 2;
-    const useBoundaryBands = relaxContacts && new Set(blocked.map(({ obstacle }) => obstacle)).size >= 2;
+    const useBoundaryBands = mixedCrossing || new Set(blocked.map(({ obstacle }) => obstacle)).size >= 2;
     const relieved = globalThis.JiexianContactRepair.repair(puzzle, current, { initial, offer });
     const repaired = relieved ??
       (candidate !== current && fewest === 1 ? sweep(puzzle, candidate, { depthLimit: 1 }) : null) ??
@@ -39,7 +40,7 @@
     const relax = globalThis.JiexianSolverRelaxation?.repair;
     const previousSeed = candidate;
     if (reembed || relaxContacts) {
-      const starts = relaxContacts ? [current, candidate] : [];
+      const starts = relaxContacts || mixedCrossing ? [current, candidate] : [];
       const rearranged = (problem?.status === 'ready' ?
         relax(puzzle, problem, { starts, reembed, useBoundaryBands, offer }) : null) ??
         (relaxContacts ? coupled(puzzle, current, { mixed: true, offer }) : null) ??

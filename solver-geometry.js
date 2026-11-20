@@ -303,29 +303,43 @@
 
   function lengthLowerBound(level) {
     const spacing = g.clearances(level).nodes;
-    const units = scaledDecimals([1, spacing, ...level.points.flat()]);
+    const endpoints = level.controls.flatMap(({ kind, a, b }) => kind === 'rail' ? [...a, ...b] : []);
+    const units = scaledDecimals([1, spacing, ...level.points.flat(), ...endpoints]);
     const points = level.points.map((point) => point.map(units));
-    const separation = (a, b) => {
-      const squared = norm(vector(points[a], points[b]));
+    const floorRoot = (squared) => {
       const root = trackSolver.ceilSqrt(squared);
       return root * root === squared ? root : root - 1n;
     };
+    const separation = (a, b) => floorRoot(norm(vector(points[a], points[b])));
+    const domains = points.map((point, i) => {
+      const control = level.controls[level.ownership[i]];
+      if (!control) return [point, point];
+      return control.kind === 'rail' ? [control.a.map(units), control.b.map(units)] : null;
+    });
+    function domainDistance([a, b], [c, d]) {
+      if (!constantClear('crossing', [a, b, c, d], 0n)) return 0n;
+      const distances = [segmentDistanceSquared(a, c, d), segmentDistanceSquared(b, c, d),
+        segmentDistanceSquared(c, a, b), segmentDistanceSquared(d, a, b)];
+      return floorRoot(distances.map(([numerator, denominator]) => numerator / denominator).reduce(min));
+    }
     const neighbors = points.map(() => []);
     let total = 0n;
-    for (const [a, b] of level.edges) {
+    for (const [edge, [a, b]] of level.edges.entries()) {
       const owner = level.ownership[a];
-      const rigid = owner === level.ownership[b] && (owner === -1 || level.controls[owner].kind === 'rotor');
-      const weight = rigid ? max(units(spacing), separation(a, b)) : units(spacing);
-      neighbors[a].push([b, weight]);
-      neighbors[b].push([a, weight]);
+      const rotorChord = owner >= 0 && owner === level.ownership[b] && level.controls[owner].kind === 'rotor';
+      const known = rotorChord ? separation(a, b) : domains[a] && domains[b] ? domainDistance(domains[a], domains[b]) : 0n;
+      const weight = max(units(spacing), known);
+      neighbors[a].push([b, weight, edge]);
+      neighbors[b].push([a, weight, edge]);
       total += weight;
     }
     const fixed = points.map((_, i) => i).filter((i) => level.ownership[i] < 0);
-    let extra = 0n;
+    const paths = [];
     for (const [index, start] of fixed.entries()) {
       // Replacing a path's per-edge bounds by the distance of its fixed endpoints
       // is valid by the triangle inequality. The cheapest such path gives the best gain.
       const costs = points.map(() => null);
+      const parents = points.map(() => null);
       const done = new Set();
       costs[start] = 0n;
       for (;;) {
@@ -335,16 +349,36 @@
         }
         if (node < 0) break;
         done.add(node);
-        for (const [other, weight] of neighbors[node]) {
+        for (const [other, weight, edge] of neighbors[node]) {
           const cost = costs[node] + weight;
-          if (costs[other] === null || costs[other] > cost) costs[other] = cost;
+          if (costs[other] === null || costs[other] > cost) {
+            costs[other] = cost;
+            parents[other] = [node, edge];
+          }
         }
       }
       for (const end of fixed.slice(index + 1)) {
-        if (costs[end] !== null) extra = max(extra, separation(start, end) - costs[end]);
+        if (costs[end] === null) continue;
+        const gain = separation(start, end) - costs[end];
+        if (gain <= 0n) continue;
+        const edges = [];
+        for (let i = end; i !== start;) {
+          const [parent, edge] = parents[i];
+          edges.push(edge);
+          i = parent;
+        }
+        paths.push({ gain, edges });
       }
     }
-    return Number((total + extra) * 1000000n / units(1)) / 1e6;
+    // Each eligible path replaces a different set of per-edge terms.
+    const used = new Set();
+    paths.sort((a, b) => a.gain === b.gain ? 0 : a.gain > b.gain ? -1 : 1);
+    for (const { gain, edges } of paths) {
+      if (edges.some((edge) => used.has(edge))) continue;
+      edges.forEach((edge) => used.add(edge));
+      total += gain;
+    }
+    return Number(total * 1000000n / units(1)) / 1e6;
   }
 
   function lengthUpperBound(level, positions) {

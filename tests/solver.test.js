@@ -32,7 +32,7 @@ const { portraitDrafts } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
-const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts } = require('./obstacle-cluster-fixture.cjs');
+const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -72,21 +72,37 @@ test('a chain of connected fixed endpoints strengthens the total length lower bo
   assert.deepEqual(points.slice(0, 2), level.points.slice(0, 2));
 });
 
-test('the full length model proves a bound that depends on a slider domain', () => {
+test('disjoint fixed endpoint paths add their bounds without double counting any edge', () => {
+  const level = puzzles.authored({ points: [[100, 100], [400, 100], [250, 130], [120, 420], [520, 420], [320, 390]],
+    edges: [[0, 2], [2, 1], [3, 5], [5, 4]], fixed: [0, 1, 3, 4] });
+  assert.equal(globalThis.JiexianSolverGeometry.lengthLowerBound(level), 700);
+});
+
+test('distance from an anchor to an entire rail gives a rigorous per-edge bound', () => {
   const level = puzzles.authored({ points: [[160, 200], [340, 200], [250, 410]], edges: [[0, 2], [1, 2]],
     fixed: [0, 1], groups: [{ kind: 'rail', members: [2], a: [250, 300], b: [250, 410] }] });
+  const best = optimalLength.start(level, [level.initial]);
+  assert.ok(best.lower <= 2 * Math.hypot(90, 100) && best.lower > 269.07);
+  assert.equal(best.status, 'length-proven');
+});
+
+test('the full length model proves a bound that depends on a slider domain', () => {
+  const level = puzzles.authored({ points: [[160, 200], [340, 200], [390, 300]], edges: [[0, 2], [1, 2]],
+    fixed: [0, 1], groups: [{ kind: 'rail', members: [2], a: [120, 300], b: [410, 300] }] });
   const context = init();
   try {
     const query = (command) => ask(context, command);
     const { prepareLength, solveLengthBound } = globalThis.JiexianExact;
     const model = prepareLength(level);
+    assert.equal(solveLengthBound(level, query, model, 130, { capsOnly: true }).status, 'unsat');
+    assert.equal(solveLengthBound(level, query, model, 250, { capsOnly: true }).status, 'sat');
     assert.equal(solveLengthBound(level, query, model, 269).status, 'unsat');
     const witness = solveLengthBound(level, query, model, 270);
     assert.equal(witness.status, 'sat');
     assert.ok(g.totalLength(level, g.positions(level, witness.state)) <= 270);
     const best = optimalLength.start(level, [level.initial]);
     assert.equal(best.status, 'length-best');
-    assert.equal(best.lower, 180);
+    assert.equal(best.lower, 200);
     const inconclusive = optimalLength.certify(level, best, (command) => command.startsWith('(check-sat') ? 'unknown' : '');
     assert.equal(inconclusive.status, 'length-best');
     assert.equal(inconclusive.lower, best.lower);
@@ -95,6 +111,27 @@ test('the full length model proves a bound that depends on a slider domain', () 
     assert.ok(certified.lower <= 2 * Math.hypot(90, 100) && certified.upper - certified.lower <= .1);
   } finally {
     destroy(context);
+  }
+});
+
+test('close nodes 24 and 3 with a single obstacle contact can reembed and shorten before Z3', () => {
+  for (const shift of [1, 3, 7]) {
+    const level = puzzles.authored(near24ScreenshotDraft(shift));
+    const kinds = [];
+    g.evaluate(level, level.points, (nodes, kind) => kinds.push([kind, nodes]));
+    assert.equal(kinds.filter(([kind]) => kind === 'edge-obstacle').length, 1);
+    assert.ok(kinds.some(([kind, nodes]) => kind === 'nodes' && nodes.includes(23) && nodes.includes(2)));
+    const feasible = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+    checkSolution(level, feasible);
+    if (shift === 1) {
+      const start = optimalLength.start(level, [feasible.state]);
+      const updates = [];
+      const best = optimalLength.refine(level, start, (result) => updates.push(result));
+      assert.ok(updates.length >= 2);
+      assert.ok(best.length < .75 * start.length);
+      assert.equal(g.evaluate(level, g.positions(level, best.state)).count, 0);
+      assert.equal(best.status, 'length-best');
+    }
   }
 });
 

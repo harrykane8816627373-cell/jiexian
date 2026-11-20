@@ -33,7 +33,12 @@
     };
     for (const { kind, vertices: [i, j, k, l], distance } of records) {
       const a = points[i], b = points[j];
-      if (kind === 'distance') {
+      if (kind === 'short') {
+        const x = a[0] - b[0], y = a[1] - b[1];
+        if (x * x + y * y <= distance * distance) continue;
+        const length = Math.hypot(x, y);
+        retain(length - distance, [x / length, y / length], [[i, -1], [j, 1]]);
+      } else if (kind === 'distance') {
         const x = a[0] - b[0], y = a[1] - b[1];
         const squared = x * x + y * y, reach = distance + .15;
         if (squared >= reach * reach) continue;
@@ -139,11 +144,11 @@
     return delta;
   }
 
-  function improve(level, records, obstacles, start) {
+  function improve(level, records, obstacles, start, iterations = 110) {
     const count = start.length, n = count * 2;
     let points = [...start, ...obstacles];
     let damping = .2;
-    for (let i = 0; i < 110; i++) {
+    for (let i = 0; i < iterations; i++) {
       const rows = [];
       const cost = residuals(records, points, (deficit, normal, terms) => {
         const row = terms.filter(([node]) => node < count).sort(([a], [b]) => a - b)
@@ -270,7 +275,7 @@
   function boundarySeeds(level, drawings, records, obstacles) {
     // Invertible affine placement preserves crossings. Rank templates by clearance,
     // then restore every constraint during refinement and final validation.
-    const distanceRecords = records.filter(({ kind }) => kind !== 'cross');
+    const distanceRecords = records.filter(({ kind }) => kind !== 'crossing');
     const windows = boundaryWindows(level);
     const starts = [];
     for (const drawing of drawings.slice(0, 5)) {
@@ -358,5 +363,27 @@
     return null;
   }
 
-  globalThis.JiexianSolverRelaxation = { repair };
+  function compact(level, model, state, offer) {
+    const { coordinates, part: { records } } = model;
+    const obstacles = coordinates.slice(level.points.length);
+    const drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
+    const seeds = drawings?.length ? boundarySeeds(level, drawings, records, obstacles).slice(0, 10) : [];
+    const starts = [{ points: g.positions(level, state) }, ...seeds];
+    const spacing = g.clearances(level).nodes;
+    const targets = [2.12, 1.52, 1.15, 1.005].map((ratio) => [
+      ...records, ...level.edges.map((vertices) => ({ vertices, kind: 'short', distance: spacing * ratio })),
+    ]);
+    for (const start of starts) {
+      let points = start.points;
+      for (const constraints of targets) {
+        const moved = improve(level, constraints, obstacles, points, 65);
+        const checked = moved.count ? improve(level, records, obstacles, moved.points, 36) : moved;
+        if (checked.count) continue;
+        points = checked.points;
+        if (offer(level.controls.map(({ members: [i] }) => points[i]))) return;
+      }
+    }
+  }
+
+  globalThis.JiexianSolverRelaxation = { repair, compact };
 })();

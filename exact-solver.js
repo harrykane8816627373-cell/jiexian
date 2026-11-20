@@ -47,7 +47,7 @@
     return or(and(call('>=', u, '0'), call('>=', v, '0')), and(call('<=', u, '0'), call('<=', v, '0')));
   }
 
-  function buildModel(level, coordinates, railBounds, part, lengthLimit) {
+  function buildModel(level, coordinates, railBounds, part, lengthLimit, capsOnly) {
     const setup = ['(set-logic QF_NRA)', '(set-option :produce-models true)',
       '(set-option :pp.decimal true)', '(set-option :pp.decimal_precision 30)'];
     const define = (name, sort, expr) => {
@@ -134,14 +134,21 @@
     });
     if (lengthLimit !== undefined) {
       const separation = real(g.clearances(level).nodes);
-      const lengths = level.edges.map(([a, b], i) => {
-        const name = `edgeLength${i}`;
-        setup.push(`(declare-const ${name} Real)`);
-        assert(call('>=', name, separation));
-        assert(call('>=', square(name), normSquared(vector(points[a], points[b]))));
-        return name;
-      });
-      assert(call('<=', lengths.length ? add(...lengths) : '0', real(lengthLimit)));
+      if (capsOnly && level.edges.length) {
+        // All other edges already use at least their minimum spacing.
+        const remaining = sub(real(lengthLimit), mul(String(level.edges.length - 1), separation));
+        assert(call('>=', remaining, separation));
+        for (const [a, b] of level.edges) assert(call('<=', normSquared(vector(points[a], points[b])), square(remaining)));
+      } else {
+        const lengths = level.edges.map(([a, b], i) => {
+          const name = `edgeLength${i}`;
+          setup.push(`(declare-const ${name} Real)`);
+          assert(call('>=', name, separation));
+          assert(call('>=', square(name), normSquared(vector(points[a], points[b]))));
+          return name;
+        });
+        assert(call('<=', lengths.length ? add(...lengths) : '0', real(lengthLimit)));
+      }
     }
     return { setup, constraints, controls };
   }
@@ -163,8 +170,8 @@
     return negative ? -number : number;
   }
 
-  function solvePart(level, coordinates, railBounds, part, query, state, preferred, limit, lengthLimit) {
-    const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part, lengthLimit);
+  function solvePart(level, coordinates, railBounds, part, query, state, preferred, limit, lengthLimit, capsOnly) {
+    const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part, lengthLimit, capsOnly);
     const first = [], pending = [];
     // A small local model usually costs less to solve once than to refine.
     const smallNeighborhood = part.neighborhood?.size && constraints.length <= 12;
@@ -426,7 +433,7 @@
     return analyze(level, { forLength: true });
   }
 
-  function solveLengthBound(level, ask, model, limit) {
+  function solveLengthBound(level, ask, model, limit, { capsOnly = false } = {}) {
     if (model.unsat) return { status: 'unsat' };
     const state = g.copy(level.initial);
     const query = (command) => {
@@ -436,7 +443,7 @@
     };
     query('(reset)');
     const { coordinates, railBounds, part } = model;
-    const status = solvePart(level, coordinates, railBounds, part, query, state, null, true, limit);
+    const status = solvePart(level, coordinates, railBounds, part, query, state, null, true, limit, capsOnly);
     if (status !== 'sat') return { status };
     return playable(level, state) ? { status: 'sat', state } : { status: 'unknown' };
   }

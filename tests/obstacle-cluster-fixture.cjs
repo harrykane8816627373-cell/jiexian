@@ -32,4 +32,17 @@ function maxObstacleClusterDrafts() {
   }));
 }
 
-module.exports = { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts };
+function near24ScreenshotDraft(shift = 1) {
+  const draft = fromPixels([149, 172.5],
+    [[1217, 315], [1052, 780], [1074, 442], [1099, 195], [1142, 247], [1113, 460], [742, 752],
+      [902, 564], [1108, 356], [1196, 476], [1151, 298], [1182, 779], [1215, 634], [909, 671],
+      [1185, 542], [1217, 514], [1217, 571], [1164, 505], [1004, 197], [1183, 413], [853, 195],
+      [1039, 265], [1037, 345], [1032, 447], [962, 259], [1162, 350], [1146, 434]],
+    [[372.9, 428.8, 123], [602, 336.1, 120.5], [392.8, 682.5, 123], [738.4, 594.1, 123],
+      [895.6, 395.6, 123], [1045.7, 619.7, 123]]);
+  draft.points[23][0] += shift;
+  draft.edges.push([11, 23]);
+  return draft;
+}
+
+module.exports = { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft };

@@ -2,8 +2,8 @@
 
 importScripts('./engine.js?v=12', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
   './solver-coupled-repair.js?v=2', './solver-repair.js?v=2', './solver-obstacles.js?v=1', './puzzles.js?v=13',
-  './solver-search.js?v=8', './solver-relaxation.js?v=4', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
-  './solver-geometry.js?v=7', './exact-solver.js?v=10', './solver-length.js?v=1');
+  './solver-search.js?v=9', './solver-relaxation.js?v=5', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
+  './solver-geometry.js?v=8', './exact-solver.js?v=11', './solver-length.js?v=2');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');
@@ -42,11 +42,10 @@ self.onmessage = async ({ data: { puzzle, current, objective } }) => {
       self.postMessage(await findWitness());
       return;
     }
-    const { start, certify } = globalThis.JiexianSolverLength;
+    const { start, refine, certify } = globalThis.JiexianSolverLength;
     const progress = (next) => {
       best = next;
-      const { length, lower, upper } = next;
-      self.postMessage({ status: 'length-progress', length, lower, upper });
+      self.postMessage({ type: 'length-progress', ...next });
     };
     best = start(puzzle, [current, puzzle.witness], progress);
     if (!best) {
@@ -63,6 +62,9 @@ self.onmessage = async ({ data: { puzzle, current, objective } }) => {
     }
     if (best.status !== 'length-proven') {
       progress(best);
+      best = refine(puzzle, best, progress);
+    }
+    if (best.status !== 'length-proven') {
       best = certify(puzzle, best, await exactQuery(), progress);
     }
     self.postMessage(best);

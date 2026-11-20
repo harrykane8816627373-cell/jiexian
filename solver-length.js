@@ -111,11 +111,38 @@
     return shorten(level, best.state, lower);
   }
 
+  function refine(level, best, progress) {
+    if (best.status === 'length-proven' || !level.obstacles.length || level.controls.length !== level.points.length ||
+        level.controls.some(({ kind }) => kind !== 'free')) return best;
+    const model = globalThis.JiexianExact.prepareLength(level);
+    if (model.unsat) return best;
+    globalThis.JiexianSolverRelaxation.compact(level, model, best.state, (state) => {
+      const length = score(level, state);
+      if (length >= best.length - 1e-8) return false;
+      best = result(level, state, length, best.lower);
+      progress?.(best);
+      return best.status === 'length-proven';
+    });
+    return best;
+  }
+
   function certify(level, best, ask, progress) {
     if (best.status === 'length-proven') return best;
     const { prepareLength, solveLengthBound } = globalThis.JiexianExact;
     const model = prepareLength(level);
     if (model.unsat) return best;
+    function useProbe(probe, threshold) {
+      if (probe.status === 'unsat') best = result(level, best.state, best.length, threshold);
+      else if (probe.status === 'sat' && score(level, probe.state) < best.length - 1e-7) {
+        best = shorten(level, probe.state, best.lower);
+      } else return false;
+      progress?.(best);
+      return true;
+    }
+    if (level.edges.length > 12 && level.controls.length > 6) {
+      const cap = Math.floor(Math.min(best.upper - .05, best.lower + g.clearances(level).nodes / 4) * 1e6) / 1e6;
+      if (cap > best.lower) useProbe(solveLengthBound(level, ask, model, cap, { capsOnly: true }), cap);
+    }
     let ceiling = best.upper;
     for (let attempt = 0; attempt < 8 && best.status !== 'length-proven'; attempt++) {
       if (ceiling - best.lower <= tolerance) break;
@@ -123,19 +150,13 @@
       const target = attempt === 0 && level.controls.length <= 6 ? Math.max(midpoint, best.upper - .09) : midpoint;
       const middle = Math.floor(target * 1e6) / 1e6;
       const probe = solveLengthBound(level, ask, model, middle);
-      if (probe.status === 'unsat') {
-        best = result(level, best.state, best.length, middle);
-      } else if (probe.status === 'sat' && score(level, probe.state) < best.length - 1e-7) {
-        best = shorten(level, probe.state, best.lower);
-        ceiling = best.upper;
-      } else {
+      if (!useProbe(probe, middle)) {
         // An inconclusive probe never strengthens the lower bound.
         ceiling = middle;
-      }
-      progress?.(best);
+      } else if (probe.status === 'sat') ceiling = best.upper;
     }
     return best;
   }
 
-  globalThis.JiexianSolverLength = { start, certify };
+  globalThis.JiexianSolverLength = { start, refine, certify };
 })();

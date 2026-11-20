@@ -238,7 +238,7 @@
     const dragging = moving?.kind === 'node' || moving?.kind === 'mechanism';
     const busy = !!animation || dragging;
     const lengthSearch = search?.objective === 'length';
-    const lengthLabel = lengthSearch ? '取消最短搜索' : '最短总线长';
+    const lengthLabel = lengthSearch ? (search.progress ? '停止并播放当前解' : '取消最短搜索') : '最短总线长';
     byId('solve').disabled = dragging || lengthSearch || animation?.singleStep === true;
     const solveLabel = search ? '取消搜索' : animation && !animation.singleStep ?
       (animation.paused ? '继续求解' : '暂停求解') : '一键求解';
@@ -615,31 +615,42 @@
   }
 
   function stopSearch() {
-    if (search.objective === 'length') {
-      const details = search.progress ? ` 已找到${lengthText(search.progress)}` : '';
-      cancelSearch(`已取消最短搜索。${details}`);
+    const job = search;
+    if (job.objective === 'length') {
+      if (job.progress) {
+        cancelSearch();
+        updateControls();
+        job.onSolved(searchTime(job.started), { ...job.progress, stopped: true });
+        return;
+      }
+      cancelSearch('已取消最短搜索。取消前尚未找到可回放的布局。');
     } else cancelSearch('已取消搜索，题目是否有解尚未确定。');
     updateControls();
   }
 
   function requestWitness(puzzle, current, report, onSolved, started = performance.now(), objective) {
-    const job = { report, started, objective };
+    const job = { report, started, objective, onSolved };
     search = job;
     updateSearchClock(job);
     updateControls();
     function receive(result) {
       if (search !== job) return;
       const { status, state: answer, preserveRepair, reason } = result;
-      if (status === 'length-progress') {
+      const validAnswer = () => Array.isArray(answer) && answer.length === puzzle.controls.length &&
+        answer.every((value, i) => Array.isArray(value) && value.length === current[i].length && value.every(Number.isFinite)) &&
+        !g.evaluate(puzzle, g.positions(puzzle, answer)).count;
+      if (result.type === 'length-progress') {
+        if (!validAnswer()) return;
         job.progress = result;
         job.clock = null;
         updateSearchClock(job);
+        updateControls();
         return;
       }
       cancelSearch();
       updateControls();
       if ((status === 'solved' || status === 'length-best' || status === 'length-proven') &&
-          !g.evaluate(puzzle, g.positions(puzzle, answer)).count) {
+          validAnswer()) {
         if (status === 'solved') {
           puzzle.witness = answer;
           puzzle.preserveRepair = preserveRepair === true;
@@ -671,7 +682,7 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=19');
+      job.worker = new Worker('./solver-worker.js?v=20');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current, objective });
@@ -736,7 +747,7 @@
       return;
     }
     const withTime = (message) => totalTime ? `${message} 判定总用时 ${totalTime}。`.trim() : message;
-    const summary = lengthResult ? lengthText(lengthResult) : '';
+    const summary = lengthResult ? `${lengthResult.stopped ? '已停止搜索并应用当前解。' : ''}${lengthText(lengthResult)}` : '';
     const plan = lengthResult ? g.planTo(level, state, lengthResult.state) : suggestion ?? g.solve(level, state);
     if (!plan.length) {
       setStatus(withTime(summary));
