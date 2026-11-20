@@ -12,6 +12,8 @@
   const countInput = byId('node-count');
   const mechanism = byId('mechanism');
   const editMechanism = byId('edit-mechanism');
+  const lengthSelect = byId('length-challenge');
+  const lengthLabels = { off: '关闭', easy: '简单', medium: '中等', hard: '困难' };
   const storageKey = 'jiexian-v2';
   const generatorRevision = puzzles.revision;
   const boardInset = 24;
@@ -96,6 +98,7 @@
   let editing = false;
   let randomConfig = null;
   let level, state, moves, elapsed, won;
+  let lengthChallenge = null;
   let clockStart = null;
   let timerMode = 'idle';
   let history = [];
@@ -137,13 +140,22 @@
     timerMode = nextMode;
   }
 
+  const lengthLimit = () => lengthChallenge?.targets[lengthChallenge.rank];
+  const draftChallengeKey = (puzzle) => JSON.stringify([
+    draft.points, draft.edges, draft.fixed, draft.groups, draft.obstacles, puzzle.radius,
+  ]);
+
   function save() {
     if (!level) return;
     saved.draft = draft;
     saved.tab = tab;
     if (tab === 'random') {
       const stable = moving?.kind === 'node' ? moving.before.state : state;
-      saved.random = { config: randomConfig, state: stable, moves, elapsed: timeSpent(), timerMode };
+      saved.random = { config: randomConfig, state: stable, moves, elapsed: timeSpent(), timerMode, lengthChallenge };
+    } else if (!editing) {
+      const key = draftChallengeKey(level);
+      if (lengthChallenge) saved.draftLengthChallenge = { key, lengthChallenge };
+      else if (saved.draftLengthChallenge?.key === key) delete saved.draftLengthChallenge;
     }
     try {
       localStorage.setItem(storageKey, JSON.stringify(saved));
@@ -155,6 +167,7 @@
   function currentSnapshot() { return { state: g.copy(state), moves }; }
 
   function load(next, run) {
+    const storedChallenge = run?.lengthChallenge ?? (next === level ? lengthChallenge : null);
     cancelSearch();
     animation = null;
     historyMotion = null;
@@ -165,12 +178,15 @@
     board.style.cursor = '';
     setFullscreenMenu(false);
     level = next;
+    lengthChallenge = storedChallenge && !editing ? g.lengthChallenge(level, storedChallenge.rank, storedChallenge.reference) : null;
     const usable = Array.isArray(run?.state) && run.state.length === level.controls.length && run.state.every((part, i) =>
       Array.isArray(part) && part.length === level.controls[i].start.length && part.every(Number.isFinite));
     state = usable ? run.state.map((value, i) => g.normalize(level.controls[i], value)) : g.copy(level.initial);
     moves = usable && Number.isSafeInteger(run.moves) && run.moves >= 0 ? run.moves : 0;
     elapsed = usable && Number.isFinite(run.elapsed) && run.elapsed >= 0 ? run.elapsed : 0;
-    won = !editing && g.evaluate(level, g.positions(level, state)).count === 0;
+    const points = g.positions(level, state);
+    const limit = lengthLimit();
+    won = !editing && !g.evaluate(level, points).count && (limit === undefined || g.totalLength(level, points) <= limit);
     timerMode = usable && ['paused', 'running'].includes(run.timerMode) ? run.timerMode : won ? 'finished' : 'idle';
     clockStart = timerMode === 'running' ? performance.now() : null;
     history = [];
@@ -212,7 +228,8 @@
     byId('difficulty-label').textContent = random ? puzzles.difficulty[level.rank].label : editing ? '编辑题目' : '试玩题目';
     byId('puzzle-meta').textContent = [...(random ? [puzzles.modes[level.mode].label] : []), meta, ...extras].join(' · ');
     byId('level-rule').textContent = random ? puzzles.modes[level.mode].rule :
-      editing ? '自己布置节点和连线，再试玩或求解。' : '拖动红色节点，让冲突连线恢复为实线。';
+      editing ? '自己布置节点和连线，再试玩或求解。' : lengthLimit() === undefined ?
+        '拖动红色节点，让冲突连线恢复为实线。' : '拖动可移动节点，消除冲突并缩短总线长。';
     board.setAttribute('aria-label', editing ? '自定义题编辑棋盘' : '解线棋盘。用 Q 或 E 选择节点，用方向键移动。');
     byId('anchor-legend').hidden = !level.ownership.includes(-1);
     byId('board-help').textContent = editing ? '双指或滚轮缩放 · 选择「移动」可平移' : '拖动空白处平移 · 双指或滚轮缩放';
@@ -221,7 +238,10 @@
 
   function updatePanel() {
     progressText();
-    updateStats(g.evaluate(level, g.positions(level, state)).count);
+    const points = g.positions(level, state);
+    const count = g.evaluate(level, points).count;
+    updateStats(count);
+    updateLength(level, points, count);
     updateControls();
     updateClock();
   }
@@ -234,9 +254,35 @@
     if (byId('moves').textContent !== String(moves)) byId('moves').textContent = moves;
   }
 
+  function updateLength(shownLevel, points, conflicts) {
+    const length = g.totalLength(shownLevel, points);
+    const meter = byId('current-length');
+    const text = length.toFixed(2);
+    if (meter.textContent !== text) meter.textContent = text;
+    const goal = byId('length-goal');
+    const limit = lengthLimit();
+    goal.hidden = limit === undefined || editing;
+    if (goal.hidden) return;
+    const reached = !conflicts && length <= limit;
+    const excess = (Math.ceil((length - limit) * 100) / 100).toFixed(2);
+    const progress = reached ? '已通关' : conflicts ? '还需消除冲突' : `还需缩短 ${excess}`;
+    const caption = `目标 ≤ ${limit.toFixed(2)} · ${progress}`;
+    if (goal.textContent !== caption) goal.textContent = caption;
+    goal.classList.toggle('good', reached);
+  }
+
   function updateControls() {
     const dragging = moving?.kind === 'node' || moving?.kind === 'mechanism';
     const busy = !!animation || dragging;
+    lengthSelect.disabled = busy || !!search || !level.edges.length;
+    const rank = lengthChallenge?.rank ?? 'off';
+    if (lengthSelect.value !== rank) lengthSelect.value = rank;
+    for (const option of lengthSelect.options) {
+      const limit = lengthChallenge?.targets[option.value];
+      const label = lengthLabels[option.value];
+      const text = limit === undefined ? label : `${label} · ≤ ${limit.toFixed(2)}`;
+      if (option.textContent !== text) option.textContent = text;
+    }
     const lengthSearch = search?.objective === 'length';
     const lengthLabel = lengthSearch ? (search.progress ? '停止并播放当前解' : '取消最短搜索') : '最短总线长';
     byId('solve').disabled = dragging || lengthSearch || animation?.singleStep === true;
@@ -279,9 +325,12 @@
   }
 
   function refreshCompletion() {
-    const complete = g.evaluate(level, g.positions(level, state)).count === 0;
+    const points = g.positions(level, state);
+    const clear = !g.evaluate(level, points).count;
+    const limit = lengthLimit();
+    const complete = clear && (limit === undefined || g.totalLength(level, points) <= limit);
     if (complete && !won) stopClock('finished');
-    if (complete && !level.witness) level.witness = g.copy(state);
+    if (clear && !level.witness) level.witness = g.copy(state);
     if (!complete && timerMode === 'finished') timerMode = 'paused';
     won = complete;
   }
@@ -294,7 +343,7 @@
     moves += count;
     if (timerMode === 'idle') startClock();
     refreshCompletion();
-    setStatus(won ? '' : message);
+    setStatus(won ? (lengthLimit() === undefined ? '' : '线长挑战已通关。') : message);
     updatePanel();
     save();
     render();
@@ -682,7 +731,7 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=20');
+      job.worker = new Worker('./solver-worker.js?v=21');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
       job.worker.postMessage({ puzzle, current, objective });
@@ -706,7 +755,9 @@
     if (objective === 'length') result.puzzle.witness = draft.answer ? puzzles.projectState(result.puzzle, draft.answer) : null;
     const play = (duration, lengthResult) => {
       editing = false;
-      load(result.puzzle);
+      const stored = saved.draftLengthChallenge;
+      const remembered = stored?.key === draftChallengeKey(result.puzzle) ? stored.lengthChallenge : null;
+      load(result.puzzle, { lengthChallenge: remembered });
       if (solveNow) animate(false, duration ?? searchTime(started), lengthResult);
     };
     if (objective === 'length' || (solveNow && !result.puzzle.witness)) {
@@ -727,9 +778,13 @@
 
   function createRandom(rank, count, mode, auto) {
     const config = { rank, count, mechanism: mode, auto, revision: generatorRevision };
+    const challengeRank = lengthChallenge?.rank;
     for (let tries = 0; tries < 6; tries++) {
       config.seed = Math.floor(Math.random() * 4294967296);
-      if (config.seed !== randomConfig?.seed && randomize(config)) return true;
+      if (config.seed !== randomConfig?.seed && randomize(config)) {
+        if (challengeRank && challengeRank !== 'off') chooseLengthChallenge(challengeRank);
+        return true;
+      }
     }
     return false;
   }
@@ -741,16 +796,48 @@
     mechanism.value = config.mechanism;
   }
 
+  function chooseLengthChallenge(rank) {
+    function apply(challenge, totalTime) {
+      lengthChallenge = challenge;
+      suggestion = null;
+      refreshCompletion();
+      if (!won && timerMode === 'paused' && !elapsed && !moves) timerMode = 'idle';
+      let message = won && lengthLimit() !== undefined ? '线长挑战已通关。' : '';
+      if (totalTime) message = `${message} 判定总用时 ${totalTime}。`.trim();
+      setStatus(message);
+      updatePanel();
+      save();
+      render();
+    }
+    if (lengthChallenge || rank === 'off') {
+      apply(lengthChallenge && { ...lengthChallenge, rank });
+      return;
+    }
+    function reference() {
+      const candidates = [level.witness, state].map((pose) => g.lengthChallenge(level, rank, pose)).filter(Boolean);
+      const best = candidates.sort((a, b) => a.targets.hard - b.targets.hard)[0];
+      if (!best) return null;
+      const short = globalThis.JiexianSolverLength.shortenLayout(level, best.reference);
+      return g.lengthChallenge(level, rank, short.state) ?? best;
+    }
+    const ready = reference();
+    if (ready) apply(ready);
+    else requestWitness(level, g.copy(state), setStatus, (duration) => apply(reference(), duration));
+  }
+
   function animate(singleStep, totalTime, lengthResult) {
-    if (!lengthResult && !level.witness && !won) {
+    const challengeAnswer = lengthLimit() === undefined ? null : lengthChallenge.reference;
+    if (!lengthResult && !challengeAnswer && !level.witness && !won) {
       requestWitness(level, g.copy(state), setStatus, (duration) => animate(singleStep, duration));
       return;
     }
     const withTime = (message) => totalTime ? `${message} 判定总用时 ${totalTime}。`.trim() : message;
     const summary = lengthResult ? `${lengthResult.stopped ? '已停止搜索并应用当前解。' : ''}${lengthText(lengthResult)}` : '';
-    const plan = lengthResult ? g.planTo(level, state, lengthResult.state) : suggestion ?? g.solve(level, state);
+    const goal = lengthResult?.state ?? challengeAnswer;
+    const plan = !lengthResult && challengeAnswer && won ? [] :
+      goal ? g.planTo(level, state, goal) : suggestion ?? g.solve(level, state);
     if (!plan.length) {
-      setStatus(withTime(summary));
+      setStatus(withTime(summary || (won && challengeAnswer ? '线长挑战已通关。' : '')));
       return;
     }
     if (timerMode === 'idle') startClock();
@@ -802,7 +889,7 @@
       animation = null;
       suggestion = singleStep ? plan.slice(1) : null;
       completeMove(before, steps.length, true, withTime(singleStep ? '已提示一步，可以继续拖动。' : ''));
-      if (won && totalTime) setStatus(withTime(summary));
+      if (lengthResult || won && totalTime) setStatus(withTime(summary || (won && challengeAnswer ? '线长挑战已通关。' : '')));
     }
     pending = requestAnimationFrame(tick);
   }
@@ -1132,6 +1219,7 @@
     const points = preview ? g.positions(preview, preview.initial) : motion?.points ?? g.positions(level, active);
     const faults = g.evaluate(shownLevel, points);
     if (!motion) updateStats(faults.count);
+    updateLength(shownLevel, points, faults.count);
     if (!size.w || !size.h) return;
     const { k, x, y } = transform();
     const r = Math.max(g.radius, 8 / k);
@@ -1386,10 +1474,14 @@
     else animate(false);
   }
   byId('solve').addEventListener('click', toggleSolve);
+  lengthSelect.addEventListener('change', () => chooseLengthChallenge(lengthSelect.value));
   byId('shortest').addEventListener('click', () => {
     if (search) stopSearch();
-    else requestWitness(level, g.copy(state), setStatus, (duration, result) => animate(false, duration, result),
-      performance.now(), 'length');
+    else {
+      const puzzle = lengthLimit() === undefined ? level : { ...level, witness: lengthChallenge.reference };
+      requestWitness(puzzle, g.copy(state), setStatus, (duration, result) => animate(false, duration, result),
+        performance.now(), 'length');
+    }
   });
   byId('hint').addEventListener('click', () => animate(true));
   byId('undo').addEventListener('click', () => stepHistory(false));

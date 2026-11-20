@@ -58,7 +58,7 @@
     });
   }
 
-  function shorten(level, initial, lower) {
+  function shortenLayout(level, initial, lower) {
     let state = contraction(level, initial), points = g.positions(level, state), length = g.totalLength(level, points);
     function tryState(trial) {
       const placed = g.positions(level, trial), cost = g.totalLength(level, placed);
@@ -70,9 +70,9 @@
     }
     for (const step of [96, 48, 24, 12, 6, 3, 1, .25, .06, .015]) {
       for (let pass = 0; pass < 3; pass++) {
-        if (length - lower < tolerance - 1e-6) {
+        if (lower !== undefined && length - lower < tolerance - 1e-6) {
           const current = result(level, state, length, lower);
-          if (current.status === 'length-proven') return current;
+          if (current.status === 'length-proven') return { state, length };
         }
         const deltas = directions(level, points);
         const shifted = (i, delta) => g.normalize(level.controls[i],
@@ -95,6 +95,11 @@
         if (!advanced) break;
       }
     }
+    return { state, length };
+  }
+
+  function shorten(level, initial, lower) {
+    const { state, length } = shortenLayout(level, initial, lower);
     return result(level, state, length, lower);
   }
 
@@ -158,5 +163,5 @@
     return best;
   }
 
-  globalThis.JiexianSolverLength = { start, refine, certify };
+  globalThis.JiexianSolverLength = { start, refine, certify, shortenLayout };
 })();

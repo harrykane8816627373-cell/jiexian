@@ -65,6 +65,8 @@ h1 { font-size: clamp(31px, 3.5vw, 45px); margin: 6px 0 5px; line-height: 1.2; l
 #board { position: absolute; inset: 0; display: block; width: 100%; height: 100%; outline-offset: -3px; cursor: grab; touch-action: none; }
 #board.dragging { cursor: grabbing !important; }
 .board-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--border); background: var(--soft); }
+.board-length { margin-inline: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.board-length strong { margin-inline-start: 4px; color: var(--text); font-variant-numeric: tabular-nums; }
 .view-tools { display: flex; gap: 2px; }
 .board-actions { display: flex; gap: 4px; }
 .view-tools button { display: grid; place-items: center; width: 38px; min-height: 38px; border-radius: 7px; border: 0; background: transparent; }
@@ -114,6 +116,9 @@ h1 { font-size: clamp(31px, 3.5vw, 45px); margin: 6px 0 5px; line-height: 1.2; l
 .settings input, .settings select { display: block; width: 100%; min-height: 38px; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); padding: 0 8px; font: inherit; }
 .settings input::placeholder { color: var(--dim); }
 .settings input:focus-visible, .settings select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.length-settings { grid-template-columns: minmax(0, 1fr); margin-bottom: 12px; }
+.length-goal { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.length-goal.good { color: var(--green); }
 .generate { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 13px; width: 100%; min-height: 41px; border-radius: 9px; font-size: 13px; font-weight: 650; }
 .edit-tools { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 8px; }
 .mechanism-editor { grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin-bottom: 10px; }
@@ -183,6 +188,9 @@ dialog p, dialog dd { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .top-inner { grid-template-columns: auto 1fr auto; }
   .modes { justify-self: center; }
   .modes button svg { display: none; }
+  .board-toolbar { gap: 6px; }
+  .view-tools button, .compact-fullscreen .view-tools button { width: 28px; }
+  .board-length { font-size: 11px; }
 }
 
 .game-fullscreen { overflow: hidden; background: #fff; }
@@ -229,6 +237,16 @@ dialog p, dialog dd { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .compact-fullscreen.fullscreen-menu-open .sidebar { display: grid; }
 .compact-fullscreen.fullscreen-menu-open #compact-solve { display: none; }
 .compact-fullscreen .timer { order: -2; justify-content: space-between; }
+
+@media (max-width: 420px) {
+  .compact-fullscreen:not(.fullscreen-menu-open) .board-toolbar:has(#compact-solve:not([hidden])) { flex-wrap: wrap; }
+  .compact-fullscreen:not(.fullscreen-menu-open) .board-toolbar:has(#compact-solve:not([hidden])) .board-length {
+    order: 1;
+    width: 100%;
+    text-align: center;
+    padding-bottom: 3px;
+  }
+}
 
 @media (max-height: 510px) and (orientation: landscape) {
   .compact-fullscreen .sidebar { width: min(270px, 46%); }

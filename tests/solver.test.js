@@ -86,6 +86,25 @@ test('distance from an anchor to an entire rail gives a rigorous per-edge bound'
   assert.equal(best.status, 'length-proven');
 });
 
+test('each length challenge has a reachable target, including a rounded hard limit', () => {
+  const level = puzzles.authored({ points: [[160, 200], [340, 200], [250, 410]], edges: [[0, 2], [1, 2]],
+    fixed: [0, 1], groups: [{ kind: 'rail', members: [2], a: [250, 300], b: [250, 410] }] });
+  const short = optimalLength.shortenLayout(level, level.initial);
+  const challenge = g.lengthChallenge(level, 'hard', short.state);
+  assert.deepEqual(challenge.targets, { easy: 349.8, medium: 309.44, hard: 269.08 });
+  assert.ok(g.totalLength(level, level.points) > challenge.targets.easy);
+  assert.equal(g.evaluate(level, level.points).count, 0);
+  const replay = g.copy(level.initial);
+  for (const { index, value } of g.planTo(level, replay, challenge.reference)) replay[index] = value;
+  const points = g.positions(level, replay);
+  assert.equal(g.evaluate(level, points).count, 0);
+  assert.ok(g.totalLength(level, points) <= challenge.targets.hard);
+  assert.deepEqual(g.lengthChallenge(level, 'off', challenge.reference).targets, challenge.targets);
+  assert.equal(g.lengthChallenge(level, 'invalid', challenge.reference), null);
+  const blocked = { ...level, obstacles: [{ center: [250, 300], r: 25 }] };
+  assert.equal(g.lengthChallenge(blocked, 'hard', challenge.reference), null);
+});
+
 test('the full length model proves a bound that depends on a slider domain', () => {
   const level = puzzles.authored({ points: [[160, 200], [340, 200], [390, 300]], edges: [[0, 2], [1, 2]],
     fixed: [0, 1], groups: [{ kind: 'rail', members: [2], a: [120, 300], b: [410, 300] }] });

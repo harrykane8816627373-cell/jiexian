@@ -59,7 +59,10 @@
   }
 
   function normalize(control, value) {
-    if (control.kind === 'rotor') return [((value[0] % tau) + tau) % tau];
+    if (control.kind === 'rotor') {
+      const angle = value[0];
+      return angle >= 0 && angle < tau ? [angle] : [((angle % tau) + tau) % tau];
+    }
     if (control.kind === 'rail') return [clamp(value[0], 0, 1)];
     return value.map((coordinate, axis) => {
       const limit = axis === 0 ? width : height;
@@ -294,6 +297,22 @@
     return level.edges.reduce((sum, [a, b]) => sum + distance(points[a], points[b]), 0);
   }
 
+  const challengeFactors = { easy: 1.30, medium: 1.15, hard: 1 };
+
+  function lengthChallenge(level, rank, reference) {
+    if ((rank !== 'off' && !Object.hasOwn(challengeFactors, rank)) ||
+        !Array.isArray(reference) || reference.length !== level.controls.length ||
+        !reference.every((value, i) => Array.isArray(value) && value.length === level.controls[i].start.length &&
+          value.every(Number.isFinite))) return null;
+    const goal = reference.map((value, i) => normalize(level.controls[i], value));
+    const points = positions(level, goal);
+    if (evaluate(level, points).count) return null;
+    const length = totalLength(level, points);
+    const targets = Object.fromEntries(Object.entries(challengeFactors).map(([tier, factor]) =>
+      [tier, Math.ceil(length * factor * 100) / 100]));
+    return { rank, reference: goal, targets };
+  }
+
   function planTo(level, state, goal) {
     const pending = level.controls.map((_, i) => i);
     const current = copy(state);
@@ -319,6 +338,6 @@
   }
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
-    positions, placeControl, normalize, dragValue, evaluate, mixValue, moveDistance, solve, planTo, totalLength, createLevel, cycle, free, mirror, rotor, rail,
+    positions, placeControl, normalize, dragValue, evaluate, mixValue, moveDistance, solve, planTo, totalLength, lengthChallenge, createLevel, cycle, free, mirror, rotor, rail,
     trackPosition, interpolate, layoutPenalty, clearances, segmentsCross };
 })();
