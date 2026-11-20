@@ -37,7 +37,8 @@
     if (obstacleLayout) return { status: 'solved', state: obstacleLayout };
     const problem = prepare?.(puzzle, current);
     if (problem?.status === 'solved' || problem?.status === 'unsat') return problem;
-    const relax = globalThis.JiexianSolverRelaxation?.repair;
+    const relaxation = globalThis.JiexianSolverRelaxation;
+    const relax = relaxation?.repair;
     const previousSeed = candidate;
     if (reembed || relaxContacts) {
       const starts = relaxContacts || mixedCrossing ? [current, candidate] : [];
@@ -46,6 +47,10 @@
         (relaxContacts ? coupled(puzzle, current, { mixed: true, offer }) : null) ??
         sweep(puzzle, current);
       if (rearranged) return rearranged;
+    }
+    if (problem?.status === 'ready') {
+      const compact = relaxation?.findCompact(puzzle, candidate);
+      if (compact) return compact;
     }
     const state = puzzles.searchDraft(puzzle, current, { candidate, offer, problem: problem?.status === 'ready' ? problem : undefined });
     if (state) return { status: 'solved', state };

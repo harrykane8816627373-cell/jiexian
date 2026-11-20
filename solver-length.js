@@ -117,11 +117,11 @@
   }
 
   function refine(level, best, progress) {
-    if (best.status === 'length-proven' || !level.obstacles.length || level.controls.length !== level.points.length ||
-        level.controls.some(({ kind }) => kind !== 'free')) return best;
+    const relaxation = globalThis.JiexianSolverRelaxation;
+    if (best.status === 'length-proven' || !relaxation.supportsCompact(level)) return best;
     const model = globalThis.JiexianExact.prepareLength(level);
     if (model.unsat) return best;
-    globalThis.JiexianSolverRelaxation.compact(level, model, best.state, (state) => {
+    relaxation.compact(level, model, best.state, (state) => {
       const length = score(level, state);
       if (length >= best.length - 1e-8) return false;
       best = result(level, state, length, best.lower);

@@ -28,7 +28,7 @@ const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
 const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
   require('./repair-fixture.cjs');
-const { portraitDrafts } = require('./portrait-fixture.cjs');
+const { portraitDrafts, pinnedObstaclePortraitDraft } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
@@ -211,6 +211,32 @@ test('shortest length search escapes a loop around a forbidden circle', () => {
   const { nodes: spacing, obstacleGap } = g.clearances(level);
   assert.ok(best.upper < 29 * spacing + 2 * Math.PI * (level.obstacles[5].r + obstacleGap));
   assert.ok(best.lower > 1212 && best.lower <= best.upper);
+});
+
+test('feasibility and length search share compact placements with a fixed node', () => {
+  const level = puzzles.authored(pinnedObstaclePortraitDraft());
+  const conflicts = [];
+  g.evaluate(level, level.points, (_, kind) => conflicts.push(kind));
+  assert.ok(conflicts.filter((kind) => kind === 'edge-obstacle').length >= 4);
+
+  const witness = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+  checkSolution(level, witness);
+  const points = g.positions(level, witness.state);
+  assert.deepEqual(points[0], level.points[0]);
+  assert.ok(g.totalLength(level, points) < 1200);
+
+  // Feasible but spread-out result from the older ordinary solver.
+  const spread = [[57.93113, 229.40952], [346.03652, 227.79437], [239.76175, 255.37731], [501, 213],
+    [392.34596, 169.48548], [455.69441, 164.20587], [569.19083, 213.67741], [538.4844, 195.61167],
+    [379.13903, 135.54436], [472.72979, 42]];
+  assert.equal(g.evaluate(level, g.positions(level, spread)).count, 0);
+  const start = optimalLength.start(level, [spread]);
+  const best = optimalLength.refine(level, start);
+  const shortened = g.positions(level, best.state);
+  assert.deepEqual(shortened[0], points[0]);
+  assert.equal(g.evaluate(level, shortened).count, 0);
+  assert.ok(best.length < 1200 && best.length < start.length);
+  assert.ok(best.lower > 717 && best.lower <= best.upper);
 });
 
 function railDraft(left, right) {
