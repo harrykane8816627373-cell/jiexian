@@ -47,7 +47,7 @@
     return or(and(call('>=', u, '0'), call('>=', v, '0')), and(call('<=', u, '0'), call('<=', v, '0')));
   }
 
-  function buildModel(level, coordinates, railBounds, part) {
+  function buildModel(level, coordinates, railBounds, part, lengthLimit) {
     const setup = ['(set-logic QF_NRA)', '(set-option :produce-models true)',
       '(set-option :pp.decimal true)', '(set-option :pp.decimal_precision 30)'];
     const define = (name, sort, expr) => {
@@ -132,6 +132,17 @@
           checksEndpoint(vertices[1], vertices[2], distance)) : or(sameSide(a, b, c, d), sameSide(c, d, a, b));
       return { name: define(`clear${i}`, 'Bool', formula), unary: support.length === 1, record };
     });
+    if (lengthLimit !== undefined) {
+      const separation = real(g.clearances(level).nodes);
+      const lengths = level.edges.map(([a, b], i) => {
+        const name = `edgeLength${i}`;
+        setup.push(`(declare-const ${name} Real)`);
+        assert(call('>=', name, separation));
+        assert(call('>=', square(name), normSquared(vector(points[a], points[b]))));
+        return name;
+      });
+      assert(call('<=', lengths.length ? add(...lengths) : '0', real(lengthLimit)));
+    }
     return { setup, constraints, controls };
   }
 
@@ -152,8 +163,8 @@
     return negative ? -number : number;
   }
 
-  function solvePart(level, coordinates, railBounds, part, query, state, preferred, limit) {
-    const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part);
+  function solvePart(level, coordinates, railBounds, part, query, state, preferred, limit, lengthLimit) {
+    const { setup, constraints, controls } = buildModel(level, coordinates, railBounds, part, lengthLimit);
     const first = [], pending = [];
     // A small local model usually costs less to solve once than to refine.
     const smallNeighborhood = part.neighborhood?.size && constraints.length <= 12;
@@ -168,7 +179,7 @@
       }
     };
     for (let i = 0; i < setup.length; i += 64) query(setup.slice(i, i + 64).join('\n'));
-    if (limit) query('(set-option :rlimit 80000)');
+    if (limit) query(`(set-option :rlimit ${lengthLimit === undefined ? 80000 : 400000})`);
     enforce(first);
     for (let pass = 0; !limit || pass < 4; pass++) {
       // Use NLSat on every relaxation, including after adding assertions.
@@ -411,5 +422,24 @@
     return playable(level, state) ? { status: 'solved', state } : { status: 'precision' };
   }
 
-  globalThis.JiexianExact = { prepareExact, solveExact };
+  function prepareLength(level) {
+    return analyze(level, { forLength: true });
+  }
+
+  function solveLengthBound(level, ask, model, limit) {
+    if (model.unsat) return { status: 'unsat' };
+    const state = g.copy(level.initial);
+    const query = (command) => {
+      const reply = ask(command).trim();
+      if (reply.startsWith('(error')) throw new Error(reply);
+      return reply;
+    };
+    query('(reset)');
+    const { coordinates, railBounds, part } = model;
+    const status = solvePart(level, coordinates, railBounds, part, query, state, null, true, limit);
+    if (status !== 'sat') return { status };
+    return playable(level, state) ? { status: 'sat', state } : { status: 'unknown' };
+  }
+
+  globalThis.JiexianExact = { prepareExact, solveExact, prepareLength, solveLengthBound };
 })();

@@ -1,9 +1,9 @@
 'use strict';
 
-importScripts('./engine.js?v=11', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
+importScripts('./engine.js?v=12', './planarity.js?v=3', './solver-contact-repair.js?v=2', './solver-obstacle-corridors.js?v=1',
   './solver-coupled-repair.js?v=2', './solver-repair.js?v=2', './solver-obstacles.js?v=1', './puzzles.js?v=13',
   './solver-search.js?v=8', './solver-relaxation.js?v=4', './solver-breakout.js?v=2', './solver-tracks.js?v=1', './solver-regions.js?v=1',
-  './solver-geometry.js?v=6', './exact-solver.js?v=9');
+  './solver-geometry.js?v=7', './exact-solver.js?v=10', './solver-length.js?v=1');
 
 async function loadZ3() {
   const response = await fetch('./vendor/z3smt2w.wasm.gz');
@@ -22,23 +22,54 @@ async function loadZ3() {
   };
 }
 
-self.onmessage = async ({ data: { puzzle, current } }) => {
+self.onmessage = async ({ data: { puzzle, current, objective } }) => {
+  let z3, context;
+  async function exactQuery() {
+    if (context === undefined) {
+      z3 = await loadZ3();
+      context = z3.init();
+    }
+    return (command) => z3.ask(context, command);
+  }
+  let best;
   try {
     const { prepareExact, solveExact } = globalThis.JiexianExact;
-    const result = globalThis.JiexianSolverSearch.search(puzzle, current, prepareExact);
-    if (result.status !== 'ready') {
-      self.postMessage(result);
+    async function findWitness() {
+      const fast = globalThis.JiexianSolverSearch.search(puzzle, current, prepareExact);
+      return fast.status === 'ready' ? solveExact(puzzle, await exactQuery(), fast.problem, fast.candidate) : fast;
+    }
+    if (objective !== 'length') {
+      self.postMessage(await findWitness());
       return;
     }
-    const z3 = await loadZ3();
-    const context = z3.init();
-    try {
-      self.postMessage(solveExact(puzzle, (command) => z3.ask(context, command), result.problem, result.candidate));
-    } finally {
-      z3.destroy(context);
+    const { start, certify } = globalThis.JiexianSolverLength;
+    const progress = (next) => {
+      best = next;
+      const { length, lower, upper } = next;
+      self.postMessage({ status: 'length-progress', length, lower, upper });
+    };
+    best = start(puzzle, [current, puzzle.witness], progress);
+    if (!best) {
+      const result = await findWitness();
+      if (result.status !== 'solved') {
+        self.postMessage(result);
+        return;
+      }
+      best = start(puzzle, [result.state], progress);
+      if (!best) {
+        self.postMessage({ status: 'precision' });
+        return;
+      }
     }
+    if (best.status !== 'length-proven') {
+      progress(best);
+      best = certify(puzzle, best, await exactQuery(), progress);
+    }
+    self.postMessage(best);
   } catch (error) {
     console.error('Custom puzzle search failed', error);
-    self.postMessage({ status: 'unknown' });
+    self.postMessage(best ?? { status: 'unknown' });
+  } finally {
+    if (context !== undefined) z3.destroy(context);
   }
 };

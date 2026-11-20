@@ -18,10 +18,12 @@ require('../solver-geometry.js');
 require('../exact-solver.js');
 require('../solver-breakout.js');
 require('../solver-relaxation.js');
+require('../solver-length.js');
 
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const { prepareExact, solveExact } = globalThis.JiexianExact;
+const optimalLength = globalThis.JiexianSolverLength;
 const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
 const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
@@ -45,6 +47,56 @@ function exact(level) {
     destroy(context);
   }
 }
+
+test('total length can be shortened on a conflict-free board and replayed without spreading it', () => {
+  const level = puzzles.authored({ points: [[100, 210], [300, 210], [500, 210], [700, 210]], edges: [[0, 1], [2, 3]] });
+  const initial = level.initial;
+  assert.equal(g.evaluate(level, level.points).count, 0);
+  const result = optimalLength.start(level, [initial]);
+  assert.equal(result.status, 'length-proven');
+  assert.equal(result.lower, 66);
+  assert.ok(result.length < 66.1);
+  const replay = g.copy(initial);
+  for (const { index, value } of g.planTo(level, initial, result.state)) replay[index] = value;
+  assert.deepEqual(replay, result.state);
+  assert.equal(g.evaluate(level, g.positions(level, replay)).count, 0);
+  assert.equal(g.totalLength(level, g.positions(level, replay)), result.length);
+});
+
+test('a chain of connected fixed endpoints strengthens the total length lower bound', () => {
+  const level = puzzles.authored({ points: [[100, 100], [400, 100], [250, 410]], edges: [[0, 2], [1, 2]], fixed: [0, 1] });
+  const result = optimalLength.start(level, [level.initial]);
+  assert.equal(result.lower, 300);
+  assert.equal(result.status, 'length-proven');
+  const points = g.positions(level, result.state);
+  assert.deepEqual(points.slice(0, 2), level.points.slice(0, 2));
+});
+
+test('the full length model proves a bound that depends on a slider domain', () => {
+  const level = puzzles.authored({ points: [[160, 200], [340, 200], [250, 410]], edges: [[0, 2], [1, 2]],
+    fixed: [0, 1], groups: [{ kind: 'rail', members: [2], a: [250, 300], b: [250, 410] }] });
+  const context = init();
+  try {
+    const query = (command) => ask(context, command);
+    const { prepareLength, solveLengthBound } = globalThis.JiexianExact;
+    const model = prepareLength(level);
+    assert.equal(solveLengthBound(level, query, model, 269).status, 'unsat');
+    const witness = solveLengthBound(level, query, model, 270);
+    assert.equal(witness.status, 'sat');
+    assert.ok(g.totalLength(level, g.positions(level, witness.state)) <= 270);
+    const best = optimalLength.start(level, [level.initial]);
+    assert.equal(best.status, 'length-best');
+    assert.equal(best.lower, 180);
+    const inconclusive = optimalLength.certify(level, best, (command) => command.startsWith('(check-sat') ? 'unknown' : '');
+    assert.equal(inconclusive.status, 'length-best');
+    assert.equal(inconclusive.lower, best.lower);
+    const certified = optimalLength.certify(level, best, query);
+    assert.equal(certified.status, 'length-proven');
+    assert.ok(certified.lower <= 2 * Math.hypot(90, 100) && certified.upper - certified.lower <= .1);
+  } finally {
+    destroy(context);
+  }
+});
 
 function railDraft(left, right) {
   return {

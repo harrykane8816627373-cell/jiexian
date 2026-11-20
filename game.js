@@ -237,7 +237,9 @@
   function updateControls() {
     const dragging = moving?.kind === 'node' || moving?.kind === 'mechanism';
     const busy = !!animation || dragging;
-    byId('solve').disabled = dragging || animation?.singleStep === true;
+    const lengthSearch = search?.objective === 'length';
+    const lengthLabel = lengthSearch ? '取消最短搜索' : '最短总线长';
+    byId('solve').disabled = dragging || lengthSearch || animation?.singleStep === true;
     const solveLabel = search ? '取消搜索' : animation && !animation.singleStep ?
       (animation.paused ? '继续求解' : '暂停求解') : '一键求解';
     if (byId('solve-label').textContent !== solveLabel) byId('solve-label').textContent = solveLabel;
@@ -248,8 +250,10 @@
       compactSolve.textContent = search ? '取消搜索' : animation.paused ? '继续' : '暂停';
     }
     byId('hint').disabled = busy || !!search;
-    byId('undo').disabled = !history.length || busy;
-    byId('redo').disabled = !future.length || busy;
+    byId('shortest').disabled = busy || (!!search && !lengthSearch);
+    if (byId('shortest').textContent !== lengthLabel) byId('shortest').textContent = lengthLabel;
+    byId('undo').disabled = !history.length || busy || lengthSearch;
+    byId('redo').disabled = !future.length || busy || lengthSearch;
     byId('restart').disabled = busy || (!moves && timerMode === 'idle');
     byId('timer-toggle').textContent = timerMode === 'running' ? '暂停' : timerMode === 'idle' ? '开始' : '继续';
     byId('zoom-out').disabled = view.zoom <= minZoom || dragging;
@@ -259,7 +263,9 @@
     byId('draft-redo').disabled = !draftFuture.length || dragging;
     byId('draft-clear').disabled = !draft.points.length || dragging;
     byId('scramble-draft').disabled = dragging || !draft.edges.length;
-    byId('solve-draft').disabled = dragging;
+    byId('solve-draft').disabled = dragging || lengthSearch;
+    byId('shortest-draft').disabled = dragging || (!!search && !lengthSearch);
+    if (byId('shortest-draft').textContent !== lengthLabel) byId('shortest-draft').textContent = lengthLabel;
     const draftSolveLabel = search ? '取消搜索' : '求解这题';
     if (byId('solve-draft-label').textContent !== draftSolveLabel) byId('solve-draft-label').textContent = draftSolveLabel;
     byId('play-draft').disabled = dragging;
@@ -586,11 +592,18 @@
     return `${((performance.now() - started) / 1000).toFixed(2)} 秒`;
   }
 
+  function lengthText({ status, length, lower }) {
+    const down = (Math.floor(lower * 100 + 1e-9) / 100).toFixed(2);
+    return `总线长 ${length.toFixed(2)}，全局下界 ${down}。${status === 'length-proven' ?
+      '已证距全局最短不超过 0.10 棋盘单位。' : '尚未证明最短。'}`;
+  }
+
   function updateSearchClock(job) {
     const clock = clockText(performance.now() - job.started);
     if (clock === job.clock) return;
     job.clock = clock;
-    job.report(`正在进行全局判定 · 总用时 ${clock} · 可随时取消`);
+    const task = job.objective === 'length' ? '正在搜索最短总线长' : '正在进行全局判定';
+    job.report(`${task} · 总用时 ${clock} · 可随时取消${job.progress ? `。已找到${lengthText(job.progress)}` : ''}`);
   }
 
   function cancelSearch(message) {
@@ -601,20 +614,38 @@
     if (message !== undefined) job.report(message ? `${message} 判定总用时 ${searchTime(job.started)}。` : '');
   }
 
-  function requestWitness(puzzle, current, report, onSolved, started = performance.now()) {
-    const job = { report, started };
+  function stopSearch() {
+    if (search.objective === 'length') {
+      const details = search.progress ? ` 已找到${lengthText(search.progress)}` : '';
+      cancelSearch(`已取消最短搜索。${details}`);
+    } else cancelSearch('已取消搜索，题目是否有解尚未确定。');
+    updateControls();
+  }
+
+  function requestWitness(puzzle, current, report, onSolved, started = performance.now(), objective) {
+    const job = { report, started, objective };
     search = job;
     updateSearchClock(job);
     updateControls();
-    function receive({ status, state: answer, preserveRepair, reason }) {
+    function receive(result) {
       if (search !== job) return;
+      const { status, state: answer, preserveRepair, reason } = result;
+      if (status === 'length-progress') {
+        job.progress = result;
+        job.clock = null;
+        updateSearchClock(job);
+        return;
+      }
       cancelSearch();
       updateControls();
-      if (status === 'solved' && !g.evaluate(puzzle, g.positions(puzzle, answer)).count) {
-        puzzle.witness = answer;
-        puzzle.preserveRepair = preserveRepair === true;
+      if ((status === 'solved' || status === 'length-best' || status === 'length-proven') &&
+          !g.evaluate(puzzle, g.positions(puzzle, answer)).count) {
+        if (status === 'solved') {
+          puzzle.witness = answer;
+          puzzle.preserveRepair = preserveRepair === true;
+        }
         report('');
-        onSolved(searchTime(job.started));
+        onSolved(searchTime(job.started), status === 'solved' ? undefined : result);
         return;
       }
       const messages = {
@@ -622,11 +653,16 @@
           '已证明无解。当前机制和间距要求无法同时满足。',
         precision: '数学判定为有解，当前解转换成游戏坐标后未通过冲突检查。',
         local: '快速搜索未找到解。通过 HTTP 打开页面即可运行全局判定。',
+        'length-local': '请通过 HTTP 打开页面以搜索最短总线长。',
       };
       const message = messages[status] ?? '全局判定未完成，当前题目是否有解尚未确定。';
       report(`${message} 判定总用时 ${searchTime(job.started)}。`);
     }
     if (location.protocol === 'file:') {
+      if (objective === 'length') {
+        receive({ status: 'length-local' });
+        return;
+      }
       // File URLs cannot load a same-origin worker or fetch its WebAssembly.
       setTimeout(() => {
         if (search !== job) return;
@@ -635,33 +671,36 @@
       return;
     }
     try {
-      job.worker = new Worker('./solver-worker.js?v=18');
+      job.worker = new Worker('./solver-worker.js?v=19');
       job.worker.onmessage = ({ data }) => receive(data);
       job.worker.onerror = () => receive({ status: 'unknown' });
-      job.worker.postMessage({ puzzle, current });
+      job.worker.postMessage({ puzzle, current, objective });
     } catch {
       receive({ status: 'unknown' });
     }
   }
 
-  function startDraft(solveNow) {
+  function startDraft(solveNow, objective) {
     const started = performance.now();
     if (!draft.edges.length) {
       byId('editor-status').textContent = '请先放置节点并添加至少一条连线。';
       return;
     }
-    const result = puzzles.solveDraft(draft);
+    const result = objective === 'length' ? { puzzle: puzzles.authored(draft) } : puzzles.solveDraft(draft);
     const report = (message) => { byId('editor-status').textContent = message; };
     if (!result.puzzle) {
       report(solveNow ? `${result.reason} 判定总用时 ${searchTime(started)}。` : result.reason);
       return;
     }
-    const play = (duration) => {
+    if (objective === 'length') result.puzzle.witness = draft.answer ? puzzles.projectState(result.puzzle, draft.answer) : null;
+    const play = (duration, lengthResult) => {
       editing = false;
       load(result.puzzle);
-      if (solveNow) animate(false, duration ?? searchTime(started));
+      if (solveNow) animate(false, duration ?? searchTime(started), lengthResult);
     };
-    if (solveNow && !result.puzzle.witness) requestWitness(result.puzzle, result.puzzle.initial, report, play, started);
+    if (objective === 'length' || (solveNow && !result.puzzle.witness)) {
+      requestWitness(result.puzzle, result.puzzle.initial, report, play, started, objective);
+    }
     else play();
   }
 
@@ -691,15 +730,16 @@
     mechanism.value = config.mechanism;
   }
 
-  function animate(singleStep, totalTime) {
-    if (!level.witness && !won) {
+  function animate(singleStep, totalTime, lengthResult) {
+    if (!lengthResult && !level.witness && !won) {
       requestWitness(level, g.copy(state), setStatus, (duration) => animate(singleStep, duration));
       return;
     }
     const withTime = (message) => totalTime ? `${message} 判定总用时 ${totalTime}。`.trim() : message;
-    const plan = suggestion ?? g.solve(level, state);
+    const summary = lengthResult ? lengthText(lengthResult) : '';
+    const plan = lengthResult ? g.planTo(level, state, lengthResult.state) : suggestion ?? g.solve(level, state);
     if (!plan.length) {
-      setStatus(withTime(''));
+      setStatus(withTime(summary));
       return;
     }
     if (timerMode === 'idle') startClock();
@@ -751,7 +791,7 @@
       animation = null;
       suggestion = singleStep ? plan.slice(1) : null;
       completeMove(before, steps.length, true, withTime(singleStep ? '已提示一步，可以继续拖动。' : ''));
-      if (won && totalTime) setStatus(withTime(''));
+      if (won && totalTime) setStatus(withTime(summary));
     }
     pending = requestAnimationFrame(tick);
   }
@@ -1320,22 +1360,26 @@
   byId('draft-redo').addEventListener('click', () => stepDraftHistory(true));
   byId('draft-clear').addEventListener('click', () => replaceDraft(emptyDraft()));
   byId('solve-draft').addEventListener('click', () => {
-    if (search) {
-      cancelSearch('已取消搜索，题目是否有解尚未确定。');
-      updateControls();
-    } else startDraft(true);
+    if (search) stopSearch();
+    else startDraft(true);
+  });
+  byId('shortest-draft').addEventListener('click', () => {
+    if (search) stopSearch();
+    else startDraft(true, 'length');
   });
   byId('play-draft').addEventListener('click', () => startDraft(false));
   byId('rules').addEventListener('click', () => byId('rules-dialog').showModal());
   function toggleSolve() {
     if (animation) animation.togglePause();
-    else if (search) {
-      cancelSearch('已取消搜索，题目是否有解尚未确定。');
-      updateControls();
-    }
+    else if (search) stopSearch();
     else animate(false);
   }
   byId('solve').addEventListener('click', toggleSolve);
+  byId('shortest').addEventListener('click', () => {
+    if (search) stopSearch();
+    else requestWitness(level, g.copy(state), setStatus, (duration, result) => animate(false, duration, result),
+      performance.now(), 'length');
+  });
   byId('hint').addEventListener('click', () => animate(true));
   byId('undo').addEventListener('click', () => stepHistory(false));
   byId('redo').addEventListener('click', () => stepHistory(true));

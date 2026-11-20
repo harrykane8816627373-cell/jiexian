@@ -224,7 +224,7 @@
     return { packed, retryParts, parts: unresolved };
   }
 
-  function analyze(level) {
+  function analyze(level, { forLength = false } = {}) {
     const count = level.points.length;
     const clearance = g.clearances(level);
     const nodeLimits = level.obstacles.map(({ r }) => r + clearance.spacing + clearance.obstacleGap);
@@ -289,15 +289,71 @@
     });
     if (unsat) return { unsat };
 
+    const railBounds = rails.map((rail) => rail && trackSolver.parameterBounds(rail));
+    // Feasibility may pick a convenient packing. Length minimization must keep all packings.
+    if (forLength) return { coordinates, railBounds, part: { controls: level.controls.map((_, i) => i), records } };
     const parts = components(records, level.controls.length);
     const result = solveTrackComponents(parts, rails, tracks, spacing, points, owners);
     if (!result) return { unsat: true };
-    const railBounds = rails.map((rail) => rail && trackSolver.parameterBounds(rail));
     const region = regions.tighten(level, result.parts, boxes, points, owners, units, railBounds);
     if (!region) return { unsat: true };
     for (const [index, value] of region.packed) result.packed.set(index, value);
     return { ...result, coordinates, railBounds, parts: region.parts, retryParts: [...result.retryParts, ...region.retry] };
   }
 
-  globalThis.JiexianSolverGeometry = { analyze, components };
+  function lengthLowerBound(level) {
+    const spacing = g.clearances(level).nodes;
+    const units = scaledDecimals([1, spacing, ...level.points.flat()]);
+    const points = level.points.map((point) => point.map(units));
+    const separation = (a, b) => {
+      const squared = norm(vector(points[a], points[b]));
+      const root = trackSolver.ceilSqrt(squared);
+      return root * root === squared ? root : root - 1n;
+    };
+    const neighbors = points.map(() => []);
+    let total = 0n;
+    for (const [a, b] of level.edges) {
+      const owner = level.ownership[a];
+      const rigid = owner === level.ownership[b] && (owner === -1 || level.controls[owner].kind === 'rotor');
+      const weight = rigid ? max(units(spacing), separation(a, b)) : units(spacing);
+      neighbors[a].push([b, weight]);
+      neighbors[b].push([a, weight]);
+      total += weight;
+    }
+    const fixed = points.map((_, i) => i).filter((i) => level.ownership[i] < 0);
+    let extra = 0n;
+    for (const [index, start] of fixed.entries()) {
+      // Replacing a path's per-edge bounds by the distance of its fixed endpoints
+      // is valid by the triangle inequality. The cheapest such path gives the best gain.
+      const costs = points.map(() => null);
+      const done = new Set();
+      costs[start] = 0n;
+      for (;;) {
+        let node = -1;
+        for (let i = 0; i < costs.length; i++) {
+          if (costs[i] !== null && !done.has(i) && (node === -1 || costs[i] < costs[node])) node = i;
+        }
+        if (node < 0) break;
+        done.add(node);
+        for (const [other, weight] of neighbors[node]) {
+          const cost = costs[node] + weight;
+          if (costs[other] === null || costs[other] > cost) costs[other] = cost;
+        }
+      }
+      for (const end of fixed.slice(index + 1)) {
+        if (costs[end] !== null) extra = max(extra, separation(start, end) - costs[end]);
+      }
+    }
+    return Number((total + extra) * 1000000n / units(1)) / 1e6;
+  }
+
+  function lengthUpperBound(level, positions) {
+    const units = scaledDecimals([1, ...positions.flat()]);
+    const points = positions.map((point) => point.map(units));
+    const total = level.edges.reduce((sum, [a, b]) => sum + trackSolver.ceilSqrt(norm(vector(points[a], points[b]))), 0n);
+    const scale = units(1);
+    return Number((total * 1000000n + scale - 1n) / scale) / 1e6;
+  }
+
+  globalThis.JiexianSolverGeometry = { analyze, components, lengthLowerBound, lengthUpperBound };
 })();

@@ -287,6 +287,14 @@
       goal = spreadLayout(level, start, Math.min(initialPenalty, witnessPenalty));
       if (initialPenalty === Infinity) keepPlayerPositions(level, state, goal);
     }
+    return planTo(level, state, goal);
+  }
+
+  function totalLength(level, points) {
+    return level.edges.reduce((sum, [a, b]) => sum + distance(points[a], points[b]), 0);
+  }
+
+  function planTo(level, state, goal) {
     const pending = level.controls.map((_, i) => i);
     const current = copy(state);
     const moves = [];
@@ -311,6 +319,6 @@
   }
 
   globalThis.Jiexian = { width, height, radius, margin, clamp, copy, distance, distanceToSegment,
-    positions, placeControl, normalize, dragValue, evaluate, mixValue, moveDistance, solve, createLevel, cycle, free, mirror, rotor, rail,
+    positions, placeControl, normalize, dragValue, evaluate, mixValue, moveDistance, solve, planTo, totalLength, createLevel, cycle, free, mirror, rotor, rail,
     trackPosition, interpolate, layoutPenalty, clearances, segmentsCross };
 })();

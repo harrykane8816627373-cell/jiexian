@@ -8,7 +8,7 @@
   <title>解线 · Untangle</title>
   <link rel="icon" href="./icon.png?v=3" type="image/png">
   <link rel="stylesheet" href="./style.css?v=11">
-  <script src="./engine.js?v=11" defer></script>
+  <script src="./engine.js?v=12" defer></script>
   <script src="./planarity.js?v=3" defer></script>
   <script src="./solver-obstacles.js?v=1" defer></script>
   <script src="./solver-contact-repair.js?v=2" defer></script>
@@ -18,7 +18,7 @@
   <script src="./puzzles.js?v=13" defer></script>
   <script src="./solver-search.js?v=8" defer></script>
   <script src="./editor-mechanisms.js?v=1" defer></script>
-  <script src="./game.js?v=31" defer></script>
+  <script src="./game.js?v=32" defer></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -132,6 +132,7 @@
           <p id="editor-tip" class="editor-tip"></p>
           <div class="actions" id="editor-actions">
             <button class="primary" id="solve-draft"><svg><use href="#i-spark"/></svg><span id="solve-draft-label">求解这题</span></button>
+            <button class="secondary" id="shortest-draft">最短总线长</button>
             <button class="secondary" id="play-draft">开始试玩</button>
           </div>
           <div class="quiet" id="edit-quiet">
@@ -155,6 +156,7 @@
           </div>
           <div class="actions">
             <button class="primary" id="solve"><svg><use href="#i-spark"/></svg><span id="solve-label">一键求解</span></button>
+            <button class="secondary" id="shortest">最短总线长</button>
             <button class="secondary" id="hint"><svg><use href="#i-hint"/></svg>提示一步</button>
           </div>
           <div class="quiet">
@@ -181,6 +183,7 @@
     </dl>
     <p>拖动空白处移动视图，用双指捏合、滚轮或 ＋ / − 缩放，按 1 回正。求解时也能移动和缩放视图。键盘可用 Q / E 选择节点、方向键移动。</p>
     <p>「提示一步」会替你走一步。「一键求解」会演示整套动作，过程中可暂停和继续。两种操作都可以撤销。</p>
+    <p>「最短总线长」搜索所有连线长度之和更小的零冲突布局，并显示能够证明的全局下界。</p>
     <p>计时在首次移动时自动开始，也可以手动开始、暂停或清零。清零只重置用时。解开后自动停表，仍然可以操作棋盘。</p>
     <p>自定义题的「机制」工具可建立多组联动、星盘和共享滑轨。先摆出无冲突布局，再点「打乱题目」，就能得到带已知解的题目。</p>
   </dialog>
