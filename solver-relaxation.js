@@ -388,19 +388,34 @@
     return starts.sort((a, b) => a.cost - b.cost).slice(0, 32);
   }
 
-  function interiorBands(level) {
+  function bankGaps(level, axis, window) {
     const { nodes, spacing, obstacleGap } = g.clearances(level);
+    const [low, high] = board[axis];
+    const [start, end] = window;
+    const other = 1 - axis;
+    const ranges = level.obstacles.flatMap(({ center, r }) => {
+      const reach = r + spacing + obstacleGap;
+      const offset = Math.max(start - center[other], center[other] - end, 0);
+      if (offset >= reach) return [];
+      const span = Math.sqrt(reach * reach - offset * offset);
+      return [{ center: center[axis], from: center[axis] - span, to: center[axis] + span }];
+    }).sort((a, b) => a.center - b.center);
+    const gaps = [];
+    for (let i = 2; i <= ranges.length - 2; i++) {
+      const from = Math.max(low, ...ranges.slice(0, i).map((range) => range.to));
+      const to = Math.min(high, ...ranges.slice(i).map((range) => range.from));
+      if (to - from >= .6 * nodes) gaps.push([from, to]);
+    }
+    return gaps;
+  }
+
+  function interiorBands(level) {
+    const { nodes } = g.clearances(level);
     const bands = [];
     for (const [axis, [low, high]] of board.entries()) {
-      const circles = [...level.obstacles].sort((a, b) => a.center[axis] - b.center[axis]);
-      const upper = ({ center, r }) => center[axis] + r + spacing + obstacleGap;
-      const lower = ({ center, r }) => center[axis] - r - spacing - obstacleGap;
       // Start from a straight strip between two banks. Wider seed frames also
       // reach the bays between circles, where the numerical repair can fan out.
-      for (let i = 2; i <= circles.length - 2; i++) {
-        const from = Math.max(low, ...circles.slice(0, i).map(upper));
-        const to = Math.min(high, ...circles.slice(i).map(lower));
-        if (to - from < .6 * nodes) continue;
+      for (const [from, to] of bankGaps(level, axis, board[1 - axis])) {
         const mid = (from + to) / 2;
         for (const offset of [0, -.6, .6]) {
           const center = mid + offset * nodes;
@@ -413,6 +428,48 @@
       }
     }
     return bands;
+  }
+
+  function interruptedPockets(level) {
+    if (level.obstacles.length < 5) return [];
+    const { nodes, spacing, obstacleGap } = g.clearances(level);
+    const pockets = [];
+    for (const [along, [lo, hi]] of board.entries()) {
+      const transverse = 1 - along;
+      const byWall = [[], []];
+      for (const { center, r } of level.obstacles) {
+        const reach = r + spacing + obstacleGap;
+        const windows = [[lo, center[along] - reach], [center[along] + reach, hi]];
+        for (const [side, window] of windows.entries()) {
+          const length = window[1] - window[0];
+          if (length < 4 * nodes) continue;
+          for (const [from, to] of bankGaps(level, transverse, window)) {
+            byWall[side].push({ along, window, center: (from + to) / 2, area: length * (to - from) });
+          }
+        }
+      }
+      for (const choices of byWall) pockets.push(...choices.sort((a, b) => b.area - a.area).slice(0, 1));
+    }
+    return pockets;
+  }
+
+  function pocketFrames(level, pockets) {
+    const { nodes } = g.clearances(level);
+    const frames = [];
+    for (const { along, window, center } of pockets) {
+      const [lo, hi] = board[1 - along];
+      const [start, end] = window;
+      for (const longitudinal of [window, [start, start + .8 * (end - start)], [end - .8 * (end - start), end]]) {
+        for (const width of [3, 4, 5, 6]) {
+          for (const offset of [0, -.6, .6]) {
+            const mid = center + offset * nodes;
+            const span = [Math.max(lo, mid - width * nodes / 2), Math.min(hi, mid + width * nodes / 2)];
+            frames.push(along === 0 ? [longitudinal, span] : [span, longitudinal]);
+          }
+        }
+      }
+    }
+    return frames;
   }
 
   function wallFrames(level) {
@@ -523,15 +580,19 @@
       .sort((a, b) => Number(key(a) === last) - Number(key(b) === last) || key(a) - key(b));
   }
 
-  function findCorridor(level, crossings) {
+  function findCorridor(level, crossings, ...seeds) {
     const bands = interiorBands(level);
-    if (!bands.length) return null;
+    const pockets = bands.length ? [] : interruptedPockets(level);
+    if (!bands.length && !pockets.length) return null;
     const edges = corridorEdges(level, crossings);
     const ordered = { ...level, edges };
     const drawings = globalThis.JiexianDrawing(level.points.length, edges);
     if (!drawings?.length) return null;
     const geometry = globalThis.JiexianSolverGeometry.analyze(ordered, { forLength: true });
     if (geometry.unsat) return null;
+    // A blockage can split a strip into shorter usable pockets. Pack the
+    // entire graph first and translate it among the circles as one shape.
+    if (pockets.length) return compactLayout(ordered, geometry, seeds, { drawings, pockets });
     const { part: { records }, coordinates } = geometry;
     const obstacles = coordinates.slice(level.points.length);
     const distanceRecords = records.filter(({ kind }) => kind !== 'crossing');
@@ -635,7 +696,7 @@
     return false;
   }
 
-  function positionTemplates(level, drawings, records, obstacles) {
+  function positionTemplates(level, drawings, records, obstacles, reflected = false) {
     const clearance = g.clearances(level).nodes;
     const obstacleRecords = records.filter(({ vertices }) => vertices.some((i) => i >= level.points.length));
     const placements = [];
@@ -643,7 +704,7 @@
       const length = g.totalLength(level, drawing);
       const rotations = [];
       for (const angle of bandAngles) {
-        const rotated = orientDrawing(drawing, angle);
+        const rotated = orientDrawing(drawing, angle, reflected);
         const extent = drawingBounds(rotated);
         const [horizontal, vertical] = extent.map(([lo, hi], axis) => {
           const [wallLo, wallHi] = board[axis];
@@ -698,7 +759,7 @@
     return level.obstacles.length > 0 && level.controls.length > 0 && level.controls.every(({ kind }) => kind === 'free');
   }
 
-  function compact(level, model, state, offer, seeds = []) {
+  function compact(level, model, state, offer, seeds = [], { drawings, pockets } = {}) {
     const { coordinates, part: { records } } = model;
     const obstacles = coordinates.slice(level.points.length);
     const anchors = level.points.flatMap((_, i) => level.ownership[i] === -1 ? [i] : []);
@@ -733,7 +794,7 @@
     }
 
     if (best && trySeed(best)) return;
-    const drawings = globalThis.JiexianDrawing(level.points.length, level.edges);
+    drawings ??= globalThis.JiexianDrawing(level.points.length, level.edges);
     const clear = anchors.length ? g.createLevel({ ...level, obstacles: [],
       controls: level.points.map((point, i) => g.free(i, point)) }) : { ...level, obstacles: [] };
     const internal = anchors.length ? globalThis.JiexianSolverGeometry.analyze(clear, { forLength: true }).part.records :
@@ -752,12 +813,20 @@
       const placements = anchors.length ? anchoredPlacements(level, templates, records, obstacles, anchors) :
         positionTemplates(level, templates, records, obstacles);
       if (!best && placements.some(({ points }) => consider(points))) return true;
-      return placements.some(({ points }) => consider(points) || trySeed(points));
+      if (placements.some(({ points }) => consider(points) || trySeed(points))) return true;
+      if (!pockets || !templates.length) return false;
+      const reflected = positionTemplates(level, templates, records, obstacles, true);
+      if (reflected.some(({ points }) => consider(points) || trySeed(points))) return true;
+      const distanceRecords = records.filter(({ kind }) => kind !== 'crossing');
+      const fitted = bandSeeds(templates, pocketFrames(level, pockets), distanceRecords, obstacles, 12).slice(0, 20);
+      const placed = repairBandStarts(level, records, obstacles, fitted.slice(0, 6)) ??
+        growBand(level, records, obstacles, [...placements, ...reflected, ...fitted]);
+      return placed && consider(placed);
     }
     const templates = [...(drawings?.slice(0, 5) ?? []), ...starts];
     const floating = templates.map((drawing) => packTemplate(fitDrawing(drawing, drawingBounds(drawing), compactFrame)))
       .filter(Boolean);
-    if (tryPlacements(floating)) return;
+    if (tryPlacements(floating) || pockets) return;
 
     if (!best && !anchors.length) {
       const bands = interiorBands(level);
@@ -796,11 +865,15 @@
     if (!supportsCompact(level)) return null;
     const model = globalThis.JiexianSolverGeometry.analyze(level, { forLength: true });
     if (model.unsat) return null;
+    return compactLayout(level, model, seeds);
+  }
+
+  function compactLayout(level, model, seeds, options) {
     let result = null;
     compact(level, model, null, (state) => {
       result = { status: 'solved', state, preserveRepair: true };
       return true;
-    }, seeds);
+    }, seeds, options);
     return result;
   }
 

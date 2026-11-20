@@ -42,7 +42,7 @@
       // Several crossed wires can trap repairs that start from the current layout.
       const crossings = initial.filter(({ kind }) => kind === 'crossing');
       if (crossings.length >= 5 || initial.length >= puzzle.points.length) {
-        const corridor = relaxation?.findCorridor(puzzle, crossings);
+        const corridor = relaxation?.findCorridor(puzzle, crossings, candidate, current);
         if (corridor) return corridor;
       }
     }

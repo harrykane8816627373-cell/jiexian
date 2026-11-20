@@ -35,7 +35,7 @@ const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require
 const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft, lengthScreenshotDraft,
   lengthScreenshotWrappedLayout, eightDiskScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 const { eightDiskCorridorDraft } = require('./eight-corridor-fixture.cjs');
-const { node19Draft } = require('./node19-fixture.cjs');
+const { node19Draft, interruptedNode19Draft } = require('./node19-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -315,6 +315,22 @@ test('wire 19–12 clears perturbed obstacles at their original radii', (t) => {
   const { puzzle } = puzzles.solveDraft(draft);
   t.mock.method(globalThis.JiexianSolverRelaxation, 'repair', () => assert.fail('unexpected long local repair'));
   checkSolution(puzzle, globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact));
+});
+
+test('wire 19–12 packs an interrupted corridor before local restarts', (t) => {
+  const draft = interruptedNode19Draft();
+  const find = (input) => {
+    const { puzzle } = puzzles.solveDraft(input);
+    assert.ok(puzzle);
+    assert.ok(g.evaluate(puzzle, puzzle.points).count > 0);
+    const result = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+    checkSolution(puzzle, result);
+    assert.ok(g.totalLength(puzzle, g.positions(puzzle, result.state)) < 2400);
+    return result.state;
+  };
+  t.mock.method(globalThis.JiexianSolverRelaxation, 'repair', () => assert.fail('unexpected long local repair'));
+  const state = find(draft);
+  assert.deepEqual(find({ ...draft, edges: [...draft.edges].reverse() }), state);
 });
 
 for (const target of [27, 29]) {
