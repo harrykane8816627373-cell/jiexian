@@ -457,7 +457,7 @@
     return level.obstacles.length > 0 && level.controls.length > 0 && level.controls.every(({ kind }) => kind === 'free');
   }
 
-  function compact(level, model, state, offer, seed = state) {
+  function compact(level, model, state, offer, seeds = []) {
     const { coordinates, part: { records } } = model;
     const obstacles = coordinates.slice(level.points.length);
     const anchors = level.points.flatMap((_, i) => level.ownership[i] === -1 ? [i] : []);
@@ -497,35 +497,52 @@
       controls: level.points.map((point, i) => g.free(i, point)) }) : { ...level, obstacles: [] };
     const internal = anchors.length ? globalThis.JiexianSolverGeometry.analyze(clear, { forLength: true }).part.records :
       records.filter(({ vertices }) => vertices.every((i) => i < level.points.length));
-    const floating = [];
     // Pack the graph before placing it among the circles, so an obstacle
     // inside a cycle of the current layout cannot keep that cycle stretched.
-    const templates = drawings?.slice(0, 5) ?? [];
-    if (best || seed) templates.push(best ?? g.positions(level, seed));
-    for (const drawing of templates) {
-      let points = fitDrawing(drawing, drawingBounds(drawing), [[240, 660], [90, 450]]);
+    const starts = best ? [best] : [...new Set(seeds)].map((start) => g.positions(level, start));
+    const compactFrame = [[240, 660], [90, 450]];
+    function packTemplate(points) {
       for (const caps of targets) points = shortenToCaps(clear, internal, [], points, caps) ?? points;
-      if (g.evaluate(clear, points).count) continue;
+      if (g.evaluate(clear, points).count) return null;
       polishLength(clear, internal, [], points, (shorter) => { points = shorter; });
-      floating.push(points);
+      return points;
     }
-    const placements = anchors.length ? anchoredPlacements(level, floating, records, obstacles, anchors) :
-      positionTemplates(level, floating, records, obstacles);
-    if (!best && placements.some(({ points }) => consider(points))) return;
-    for (const { points } of placements) {
-      if (consider(points)) return;
-      if (trySeed(points)) return;
+    function tryPlacements(templates) {
+      const placements = anchors.length ? anchoredPlacements(level, templates, records, obstacles, anchors) :
+        positionTemplates(level, templates, records, obstacles);
+      if (!best && placements.some(({ points }) => consider(points))) return true;
+      return placements.some(({ points }) => consider(points) || trySeed(points));
+    }
+    const templates = [...(drawings?.slice(0, 5) ?? []), ...starts];
+    const floating = templates.map((drawing) => packTemplate(fitDrawing(drawing, drawingBounds(drawing), compactFrame)))
+      .filter(Boolean);
+    if (tryPlacements(floating)) return;
+
+    if (!best && !anchors.length) {
+      // If the first aspect ratio jams, restore clearances before shortening.
+      // Preserve the original drawing as one start and try wider and taller fits.
+      const frames = [null, [[90, 810], [96, 444]], [compactFrame[0], board[1]], [[170, 730], board[1]]];
+      const extraShapes = [...starts, ...(drawings?.slice(0, 2) ?? [])];
+      for (const frame of frames) {
+        for (const shape of frame ? extraShapes : starts) {
+          const placed = frame ? fitDrawing(shape, drawingBounds(shape), frame) : shape;
+          const legal = improve(clear, internal, [], placed, 80);
+          if (legal.count) continue;
+          const points = packTemplate(legal.points);
+          if (points && tryPlacements([points])) return;
+        }
+      }
     }
 
     if (best && polishLength(level, records, obstacles, best, consider)) return;
     if (anchors.length) return;
     const polished = best;
-    const seeds = drawings?.length ? boundarySeeds(level, drawings, records, obstacles).slice(0, 10) : [];
-    if (seeds.some(({ points }) => trySeed(points))) return;
+    const bands = drawings?.length ? boundarySeeds(level, drawings, records, obstacles).slice(0, 10) : [];
+    if (bands.some(({ points }) => trySeed(points))) return;
     if (best !== polished) polishLength(level, records, obstacles, best, consider);
   }
 
-  function findCompact(level, seed) {
+  function findCompact(level, ...seeds) {
     if (!supportsCompact(level)) return null;
     const model = globalThis.JiexianSolverGeometry.analyze(level, { forLength: true });
     if (model.unsat) return null;
@@ -533,7 +550,7 @@
     compact(level, model, null, (state) => {
       result = { status: 'solved', state, preserveRepair: true };
       return true;
-    }, seed);
+    }, seeds);
     return result;
   }
 

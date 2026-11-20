@@ -33,7 +33,7 @@ const { rotorChord } = require('./orbit-fixture.cjs');
 const { corridorLevel } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
 const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft, lengthScreenshotDraft,
-  lengthScreenshotWrappedLayout } = require('./obstacle-cluster-fixture.cjs');
+  lengthScreenshotWrappedLayout, eightDiskScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -211,6 +211,28 @@ test('shortest length search escapes a loop around a forbidden circle', () => {
   const { nodes: spacing, obstacleGap } = g.clearances(level);
   assert.ok(best.upper < 29 * spacing + 2 * Math.PI * (level.obstacles[5].r + obstacleGap));
   assert.ok(best.lower > 1212 && best.lower <= best.upper);
+});
+
+test('eight maximum-radius disks leave room for a compact layout on the left', () => {
+  for (const sample of [0, 1, 3]) {
+    const draft = eightDiskScreenshotDraft();
+    let seed = sample;
+    function jitter(value) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return value + 4 * (seed / 2 ** 32 - .5);
+    }
+    if (sample) {
+      draft.obstacles = draft.obstacles.map(({ center, r }) => ({ center: center.map(jitter), r }));
+      draft.points = draft.points.map((point) => point.map((x, axis) =>
+        g.clamp(jitter(x), g.margin, (axis ? g.height : g.width) - g.margin)));
+    }
+    const level = puzzles.authored(draft);
+    const result = globalThis.JiexianSolverSearch.search(level, level.initial, prepareExact);
+    checkSolution(level, result);
+    const points = g.positions(level, result.state);
+    assert.ok(points.every(([x]) => x < g.width / 2));
+    assert.ok(g.totalLength(level, points) < 2200);
+  }
 });
 
 test('feasibility and length search share compact placements with a fixed node', () => {

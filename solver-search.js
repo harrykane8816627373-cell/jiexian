@@ -49,7 +49,7 @@
       if (rearranged) return rearranged;
     }
     if (problem?.status === 'ready') {
-      const compact = relaxation?.findCompact(puzzle, candidate);
+      const compact = relaxation?.findCompact(puzzle, candidate, current);
       if (compact) return compact;
     }
     const state = puzzles.searchDraft(puzzle, current, { candidate, offer, problem: problem?.status === 'ready' ? problem : undefined });

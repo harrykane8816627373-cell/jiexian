@@ -67,5 +67,23 @@ function lengthScreenshotWrappedLayout() {
     [787.3783, 229.1717], [822.9942, 215.1444]];
 }
 
+function eightDiskScreenshotDraft() {
+  const scale = 974 / 852;
+  const world = ([x, y]) => [24 + (x - 193.5) / scale, 24 + (y - 222.5) / scale];
+  const points = [[515.5, 703], [438, 764.5], [574.5, 733], [656, 764.5], [461, 625.5], [493, 587.5],
+    [498, 736.5], [549.5, 686.5], [465, 672.5], [429.5, 535], [533, 629], [342.5, 483], [549.5, 493],
+    [414, 605.5], [431.5, 707], [620, 661.5], [545, 565.5], [492.5, 527], [745.5, 651], [693, 702.5],
+    [753, 723], [834, 764.5], [719, 764.5], [911, 744], [841, 695.5], [815, 635], [915, 663]]
+    .map(world).map(([x, y]) => [Math.max(42, Math.min(858, x)), Math.max(42, Math.min(498, y))]);
+  const edges = [[1, 7], [1, 8], [2, 4], [2, 7], [2, 11], [2, 15], [3, 4], [3, 7], [3, 8],
+    [4, 11], [4, 16], [4, 23], [5, 9], [5, 10], [6, 10], [6, 11], [9, 15], [10, 12], [10, 18], [12, 13],
+    [12, 14], [13, 18], [14, 15], [16, 17], [16, 19], [17, 18], [19, 20], [19, 22], [19, 26], [20, 21],
+    [21, 23], [22, 23], [22, 24], [22, 25], [24, 27], [25, 26], [25, 27]].map((edge) => edge.map((node) => node - 1));
+  const obstacles = [[392.87, 334.1], [619.2, 333.1], [842.86, 328.22], [1063.46, 360.42],
+    [673.27, 539.52], [896.94, 527.06], [1051.77, 691.53], [464.45, 678.31]]
+    .map((center) => ({ center: world(center), r: 96 }));
+  return { points, edges, obstacles };
+}
+
 module.exports = { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft,
-  lengthScreenshotDraft, lengthScreenshotWrappedLayout };
+  lengthScreenshotDraft, lengthScreenshotWrappedLayout, eightDiskScreenshotDraft };
