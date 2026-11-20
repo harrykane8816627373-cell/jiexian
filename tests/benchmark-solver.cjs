@@ -3,7 +3,7 @@ const { readFileSync } = require('node:fs');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { runInNewContext, runInThisContext } = require('node:vm');
 const { gunzipSync } = require('node:zlib');
-const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft } =
+const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
   require('./repair-fixture.cjs');
 
 const repo = path.join(__dirname, '..');
@@ -14,23 +14,28 @@ const repairCase = process.argv.includes('--repair');
 const coupledCase = process.argv.includes('--coupled-repair');
 const hybridCase = process.argv.includes('--hybrid');
 const contactCase = process.argv.includes('--contacts');
-const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || contactCase;
+const corridorCase = process.argv.includes('--corridors');
+const fullComparison = contactCase || corridorCase;
+const pipeline = obstacleOnly || repairCase || coupledCase || hybridCase || fullComparison;
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const revision = contactCase ? 'aadcb9e' : hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
+const revision = corridorCase ? 'dc80a3a' : contactCase ? 'aadcb9e' : hybridCase ? 'f008e36' : coupledCase ? 'b00d685' : repairCase ? 'c516d53' :
   obstacleOnly ? '2c36708' : obstacles ? '23ee6f1' : parallel ? '2c917c1' : '170852e';
 const oldScript = (name) => execFileSync('git', ['show', `${revision}:${name}`], { cwd: repo, encoding: 'utf8' });
-const historicalProcess = contactCase && args[1] === 'before';
+const historicalProcess = fullComparison && args[1] === 'before';
 for (const name of ['engine.js', 'planarity.js', 'solver-obstacles.js', 'solver-repair.js', 'solver-coupled-repair.js',
-  'solver-contact-repair.js', 'puzzles.js', 'solver-search.js', 'solver-tracks.js', 'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
+  'solver-contact-repair.js', 'solver-obstacle-corridors.js', 'puzzles.js', 'solver-search.js', 'solver-tracks.js',
+  'solver-regions.js', 'solver-geometry.js', 'exact-solver.js']) {
   // Use the same V8 realm in the two isolated subprocesses for the full-pipeline comparison.
   if (!historicalProcess) require(path.join(repo, name));
-  else if (name !== 'solver-contact-repair.js') runInThisContext(oldScript(name), { filename: name });
+  else if (name !== 'solver-obstacle-corridors.js' && (!contactCase || name !== 'solver-contact-repair.js')) {
+    runInThisContext(oldScript(name), { filename: name });
+  }
 }
 const g = globalThis.Jiexian;
 const puzzles = globalThis.JiexianPuzzles;
 const current = globalThis.JiexianExact;
 const sandbox = { Jiexian: g };
-if (!contactCase) {
+if (!fullComparison) {
   if (coupledCase || hybridCase) runInNewContext(oldScript('engine.js'), sandbox);
   if (pipeline) {
     for (const script of ['planarity.js', 'puzzles.js', 'solver-regions.js']) runInNewContext(oldScript(script), sandbox);
@@ -42,7 +47,7 @@ if (!contactCase) {
   if (parallel || obstacles || pipeline) runInNewContext(oldScript('solver-geometry.js'), sandbox);
   runInNewContext(oldScript('exact-solver.js'), sandbox);
 }
-const previous = contactCase ? current : sandbox.JiexianExact;
+const previous = fullComparison ? current : sandbox.JiexianExact;
 
 const z3 = require(path.join(repo, 'vendor/z3smt2w.js'))({
   wasmBinary: gunzipSync(readFileSync(path.join(repo, 'vendor/z3smt2w.wasm.gz'))), noInitialRun: true,
@@ -195,7 +200,9 @@ function report(level, solver, repetitions) {
   return { ms: Number(middle.time.toFixed(2)), status: middle.status, checks: middle.checks };
 }
 
-const cases = contactCase ? [
+const cases = corridorCase ? [
+  ['27-node screenshot with two long edges blocked by different disks', puzzles.authored(corridorScreenshotDraft()), 9, 1],
+] : contactCase ? [
   ['27-node screenshot with eight disks and six blocked contacts', puzzles.authored(contactScreenshotDraft()), 9],
   ['27-node screenshot with perturbed positions and eight blocked contacts', puzzles.authored(perturbedContactDraft(0, 1.8)), 9, 1],
 ] : hybridCase ? [

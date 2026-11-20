@@ -211,7 +211,9 @@
     };
     const solve = (part, points, target, preferred, limited = false) => {
       if (checks++) query('(reset)');
-      return solvePart(level, points, railBounds, part, query, target, preferred, limited);
+      const result = solvePart(level, points, railBounds, part, query, target, preferred, limited);
+      if (limited) query('(set-option :rlimit 0)');
+      return result;
     };
     let seedPoints;
     const reusable = [];
@@ -243,7 +245,6 @@
         });
         const frozen = coordinates.map((point, i) => active.has(level.ownership[i]) ? point : seedPoints[i]);
         const result = solve({ ...part, controls, records }, frozen, trial, null, true);
-        query('(set-option :rlimit 0)');
         if (result === 'sat') seedPoints = positions();
       }
       if (playable(level, trial)) return { status: 'solved', state: trial, preserveRepair: true };
@@ -253,10 +254,21 @@
         for (const i of part.controls) state[i] = trial[i];
       }
     }
+    let pending = parts.filter((part) => !reusable.includes(part)).map((part) => ({
+      part, preferred: seedPoints && new Set(violations(part, seedPoints)),
+    }));
+    if (level.obstacles.length && pending.length > 1) {
+      // Let independent components establish a quick contradiction before retrying any difficult component.
+      const deferred = [];
+      for (const entry of pending) {
+        const result = solve(entry.part, coordinates, state, entry.preferred, true);
+        if (result === 'unsat') return { status: 'unsat' };
+        if (result === 'unknown') deferred.push(entry);
+      }
+      pending = deferred;
+    }
     let uncertain = false;
-    for (const part of parts) {
-      if (reusable.includes(part)) continue;
-      const preferred = seedPoints && new Set(violations(part, seedPoints));
+    for (const { part, preferred } of pending) {
       const result = solve(part, coordinates, state, preferred);
       if (result === 'unsat') return { status: 'unsat' };
       if (result === 'unknown') uncertain = true;

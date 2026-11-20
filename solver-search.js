@@ -21,6 +21,7 @@
     const relieved = globalThis.JiexianContactRepair.repair(puzzle, current, { initial, offer });
     const repaired = relieved ??
       (candidate !== current && fewest === 1 ? sweep(puzzle, candidate, { depthLimit: 1 }) : null) ??
+      globalThis.JiexianObstacleCorridors.repair(puzzle, current, initial, offer) ??
       coupled(puzzle, current, { offer }) ??
       coupled(puzzle, current, { mixed: true, offer }) ??
       sweep(puzzle, current);

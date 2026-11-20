@@ -134,11 +134,11 @@
     }
   }
 
-  function repair(level, current, { offer, initial } = {}) {
+  function repair(level, current, { offer, initial, seeded = false } = {}) {
     if (!level.obstacles.length || !level.controls.length) return null;
     const original = g.positions(level, current);
     initial ??= contacts(level, original);
-    if (initial.length > 24 || initial.filter(({ obstacle }) => obstacle !== undefined).length < 3 ||
+    if (!initial.length || initial.length > 24 || (!seeded && initial.filter(({ obstacle }) => obstacle !== undefined).length < 3) ||
         initial.some(({ nodes }) => nodes.every((node) => level.ownership[node] < 0))) return null;
     const affected = new Set(initial.flatMap(({ nodes }) => nodes.map((node) => level.ownership[node])));
     const clearance = g.clearances(level);
@@ -146,7 +146,9 @@
     const work = n * n + m * (n + m) + (n + m) * level.obstacles.length;
     const limit = g.clamp(Math.floor(270_000 / work), 28, 105);
     let fewest = initial.length;
-    for (const [turn, neighboringWeight] of [[0, .15], [-.24, .4], [.24, .4], [-.62, .8], [.62, .8]]) {
+    const starts = [[0, .15], [-.24, .4], [.24, .4]];
+    if (!seeded) starts.push([-.62, .8], [.62, .8]);
+    for (const [turn, neighboringWeight] of starts) {
       const metrics = controlMetrics(level, affected, neighboringWeight);
       const state = [...current];
       const points = [...original];

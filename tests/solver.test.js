@@ -9,6 +9,7 @@ require('../solver-obstacles.js');
 require('../solver-repair.js');
 require('../solver-coupled-repair.js');
 require('../solver-contact-repair.js');
+require('../solver-obstacle-corridors.js');
 require('../puzzles.js');
 require('../solver-search.js');
 require('../solver-tracks.js');
@@ -21,7 +22,7 @@ const puzzles = globalThis.JiexianPuzzles;
 const { prepareExact, solveExact } = globalThis.JiexianExact;
 const { repair } = globalThis.JiexianRepair;
 const { repair: repairTogether } = globalThis.JiexianCoupledRepair;
-const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft } =
+const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft } =
   require('./repair-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
@@ -453,6 +454,67 @@ test('a geometric sweep can finish the last conflict after contact repair stalls
   assert.equal(direct, null);
   assert.equal(unresolved, 1);
   checkSolution(level, globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail('unexpected exact phase')));
+});
+
+test('two long edges blocked by separate disks are repaired with different line directions', () => {
+  const level = puzzles.authored(corridorScreenshotDraft());
+  const initial = [];
+  g.evaluate(level, level.points, (nodes, kind, disk) => initial.push([kind, nodes.map((i) => i + 1), disk]));
+  assert.deepEqual(initial, [['edge-obstacle', [3, 8], 0], ['edge-obstacle', [12, 13], 2]]);
+  const result = globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail('unexpected exact phase'));
+  checkSolution(level, result);
+  assert.equal(result.preserveRepair, true);
+  assert.ok(result.state.every((point, i) => g.distance(point, level.initial[i]) < 100));
+});
+
+test('separate obstacle corridors survive 36 perturbations of the screenshot', () => {
+  const draft = corridorScreenshotDraft();
+  for (let sample = 0; sample < 36; sample++) {
+    const points = draft.points.map((point, i) => point.map((value, axis) =>
+      g.clamp(value + 3 * Math.sin(i * 13 + sample * 17 + axis * 7), g.margin, (axis ? g.height : g.width) - g.margin)));
+    const obstacles = draft.obstacles.map(({ center, r }, i) => ({
+      center: center.map((value, axis) => value + 1.8 * Math.sin(i * 37 + sample * 23 + axis * 5)),
+      r: r + 1.5 * Math.cos(i * 13 + sample * 29),
+    }));
+    const level = puzzles.authored({ ...draft, points, obstacles });
+    const result = globalThis.JiexianSolverSearch.search(level, level.initial, () => assert.fail(`exact phase for sample ${sample}`));
+    assert.equal(result.status, 'solved');
+    assert.equal(g.evaluate(level, g.positions(level, result.state)).count, 0);
+  }
+});
+
+test('bounded exact work in one obstacle component cannot delay a contradiction in another', () => {
+  const points = [[100, 100], [101, 101], [650, 130], [651, 131]];
+  for (const end of [662, 699]) {
+    const level = g.createLevel({
+      points, edges: [], obstacles: [{ center: [450, 450], r: 24 }],
+      controls: [g.rail(0, points[0], [110, 100], 0), g.rail(1, points[1], [145, 103], 0),
+        g.rail(2, points[2], [663, 130], 0), g.rail(3, points[3], [end, 134], 0)],
+    });
+    const problem = prepareExact(level);
+    assert.deepEqual(problem.parts.map(({ controls }) => controls.length), [2, 2]);
+    let checks = 0, resets = 0;
+    const bounded = [];
+    const context = init();
+    try {
+      const result = solveExact(level, (command) => {
+        if (command === '(set-option :rlimit 80000)') bounded.push(checks);
+        if (command === '(reset)') resets++;
+        if (command === '(check-sat-using qfnra-nlsat)' && checks++ === 0) return 'unknown';
+        return ask(context, command);
+      }, problem);
+      assert.deepEqual(bounded, [0, 1]);
+      if (end === 662) {
+        assert.equal(result.status, 'unsat');
+        assert.equal(resets, 1);
+      } else {
+        checkSolution(level, result);
+        assert.ok(checks >= 3);
+      }
+    } finally {
+      destroy(context);
+    }
+  }
 });
 
 test('contact corrections move mirror partners, rail sliders and rotor members through their controls', () => {

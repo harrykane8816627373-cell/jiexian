@@ -68,4 +68,21 @@ function perturbedContactDraft(sample, amount) {
   return { ...draft, points, obstacles };
 }
 
-module.exports = { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft };
+function corridorScreenshotDraft() {
+  const world = ([x, y]) => [
+    Math.min(858, Math.max(42, 24 + (x - 150.3) * 852 / 1090)),
+    Math.min(498, Math.max(42, 24 + (y - 177.2) * 492 / 630)),
+  ];
+  const points = [[1217.7, 471.7], [173.5, 784.4], [884.5, 445.1], [941.8, 387.2], [1086.8, 283.1], [1034.7, 519.4],
+    [173.45, 677.8], [204.05, 488], [930.9, 579.75], [1105.3, 602.9], [1093, 404.8], [239.2, 608.1], [837.6, 730.9],
+    [196.35, 541.9], [1113.75, 784.4], [1217.65, 708], [977.1, 713.5], [1029.2, 619.15], [915.7, 250.7],
+    [1140.6, 673.4], [757.7, 214.1], [857.1, 353.9], [367.8, 264.35], [230.6, 332.45], [539.3, 203.25],
+    [1106.15, 525.85], [1141.85, 457.6]].map(world);
+  const obstacles = [[381.3, 421, 99.8], [618, 339.6, 86.2], [503.2, 584.2, 80.7], [715.6, 567.2, 76.3]]
+    .map(([x, y, radius]) => ({ center: world([x, y]), r: radius * 852 / 1090 }));
+  return { points, edges: contactScreenshotDraft().edges, obstacles };
+}
+
+module.exports = {
+  screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactScreenshotDraft, perturbedContactDraft, corridorScreenshotDraft,
+};
