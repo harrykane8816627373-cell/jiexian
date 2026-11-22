@@ -37,5 +37,6 @@
 ## 测试与发布
 
 - `node --test tests/solver.test.js` 运行求解和回放回归测试。
+- `node tests/benchmark-layouts.cjs` 在五个固定棋盘上测量局部修补、通道重排和线长优化，输出耗时中位数、总线长和最终坐标摘要。[复现版本对比](./SOLVER.md#布局搜索与线长优化)
 - `node tests/benchmark-solver.cjs --crossing` 测量这类只有一对交叉但需要重排全图的棋盘。`--neighborhood` 和 `--block` 测量窄禁行通道。`--algebra` 测量星盘净距判定。`--breakout` 测量截图重建棋盘。
 - 将待发布提交推送到 GitHub 后，运行 `node scripts/package-pagelet.cjs ../jiexian-pagelet`。将生成目录或其内容的 ZIP 交给 Pagelet，ZIP 根目录须包含 `index.html`。包内的 Worker 从该 GitHub 提交读取 WASM 并校验 SHA-256。

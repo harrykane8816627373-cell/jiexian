@@ -7,45 +7,55 @@
   const bandAngles = Array.from({ length: 16 }, (_, i) => i * Math.PI / 8);
   const neighborDirections = [0, Math.PI / 7, -Math.PI / 7].map((angle) => [Math.cos(angle), Math.sin(angle)]);
 
-  function side(a, b, p, q, vertices) {
+  const crossingGap = .08;
+
+  function sideGap(a, b, p, q, i, j, k, l, gradient) {
     const dx = b[0] - a[0], dy = b[1] - a[1];
+    const px = p[0] - a[0], py = p[1] - a[1];
+    const qx = q[0] - a[0], qy = q[1] - a[1];
+    // |dx| + |dy| bounds the length from above. Leave extra room so that
+    // near-tangent pairs still use the original normalized distance.
+    const guard = 2 * crossingGap * (Math.abs(dx) + Math.abs(dy));
+    const crossP = py * dx - px * dy, crossQ = qy * dx - qx * dy;
+    if ((crossP > guard && crossQ > guard) || (crossP < -guard && crossQ < -guard)) return Infinity;
     const length = Math.hypot(dx, dy);
     const x = length ? dx / length : 1, y = length ? dy / length : 0;
-    const left = (p[1] - a[1]) * x - (p[0] - a[0]) * y;
-    const right = (q[1] - a[1]) * x - (q[0] - a[0]) * y;
+    const left = py * x - px * y, right = qy * x - qx * y;
     const sign = Math.min(left, right) >= -Math.max(left, right) ? 1 : -1;
     const first = sign * left <= sign * right;
     const gap = sign * (first ? left : right);
-    if (gap >= .08) return null;
-    const endpoint = first ? p : q;
-    const t = length ? ((endpoint[0] - a[0]) * x + (endpoint[1] - a[1]) * y) / length : .5;
-    const [i, j, k, l] = vertices;
-    return { gap, normal: [-y * sign, x * sign],
-      terms: [[i, t - 1], [j, -t], [first ? k : l, 1]] };
+    if (gradient && gap < crossingGap) {
+      const t = length ? (first ? px * x + py * y : qx * x + qy * y) / length : .5;
+      gradient.normal = [-y * sign, x * sign];
+      gradient.terms = [[i, t - 1], [j, -t], [first ? k : l, 1]];
+    }
+    return gap;
   }
 
   function residuals(records, points, add, limit = Infinity) {
     let cost = 0;
-    const retain = (deficit, normal, terms) => {
-      if (deficit <= 0) return;
-      cost += deficit * deficit;
-      add?.(deficit, normal, terms);
-    };
-    for (const { kind, vertices: [i, j, k, l], distance } of records) {
+    const firstSide = add && {}, secondSide = add && {};
+    for (const { kind, vertices, distance } of records) {
+      const i = vertices[0], j = vertices[1];
       const a = points[i], b = points[j];
+      let deficit;
       if (kind === 'short') {
         const x = a[0] - b[0], y = a[1] - b[1];
         if (x * x + y * y <= distance * distance) continue;
         const length = Math.hypot(x, y);
-        retain(length - distance, [x / length, y / length], [[i, -1], [j, 1]]);
+        deficit = length - distance;
+        if (deficit <= 0) continue;
+        add?.(deficit, [x / length, y / length], [[i, -1], [j, 1]]);
       } else if (kind === 'distance') {
         const x = a[0] - b[0], y = a[1] - b[1];
         const squared = x * x + y * y, reach = distance + .15;
         if (squared >= reach * reach) continue;
         const length = Math.sqrt(squared);
-        retain(reach - length, length ? [x / length, y / length] : [1, 0], [[i, 1], [j, -1]]);
+        deficit = reach - length;
+        if (deficit <= 0) continue;
+        add?.(deficit, length ? [x / length, y / length] : [1, 0], [[i, 1], [j, -1]]);
       } else if (kind === 'segment') {
-        const p = points[k];
+        const k = vertices[2], p = points[k];
         const dx = b[0] - a[0], dy = b[1] - a[1], squared = dx * dx + dy * dy;
         const px = p[0] - a[0], py = p[1] - a[1];
         const t = squared ? g.clamp((px * dx + py * dy) / squared, 0, 1) : 0;
@@ -53,76 +63,100 @@
         const gapSquared = x * x + y * y, reach = distance + .15;
         if (gapSquared >= reach * reach) continue;
         const length = Math.sqrt(gapSquared);
-        let normal = length > 1e-10 ? [x / length, y / length] : [1, 0];
-        // At distance zero a tangent step may leave the point on the segment.
-        if (length <= 1e-10 && squared) {
-          const inverseLength = (dx < 0 || dx === 0 && dy < 0 ? -1 : 1) / Math.sqrt(squared);
-          normal = [-dy * inverseLength, dx * inverseLength];
+        deficit = reach - length;
+        if (deficit <= 0) continue;
+        if (add) {
+          let normal = length > 1e-10 ? [x / length, y / length] : [1, 0];
+          // At distance zero a tangent step may leave the point on the segment.
+          if (length <= 1e-10 && squared) {
+            const inverseLength = (dx < 0 || dx === 0 && dy < 0 ? -1 : 1) / Math.sqrt(squared);
+            normal = [-dy * inverseLength, dx * inverseLength];
+          }
+          add(deficit, normal, [[i, t - 1], [j, -t], [k, 1]]);
         }
-        retain(reach - length, normal, [[i, t - 1], [j, -t], [k, 1]]);
       } else {
+        const k = vertices[2], l = vertices[3];
         const c = points[k], d = points[l];
-        const first = side(a, b, c, d, [i, j, k, l]);
-        if (!first) continue;
-        const second = side(c, d, a, b, [k, l, i, j]);
-        if (!second) continue;
-        const { gap, normal, terms } = first.gap >= second.gap ? first : second;
-        retain(.08 - gap, normal, terms);
+        const first = sideGap(a, b, c, d, i, j, k, l, firstSide);
+        if (first >= crossingGap) continue;
+        const second = sideGap(c, d, a, b, k, l, i, j, secondSide);
+        if (second >= crossingGap) continue;
+        deficit = crossingGap - Math.max(first, second);
+        if (add) {
+          const { normal, terms } = first >= second ? firstSide : secondSide;
+          add(deficit, normal, terms);
+        }
       }
+      cost += deficit * deficit;
       if (cost >= limit) break;
     }
     return cost;
   }
 
+  // Store the lower triangle contiguously. Row i has i + 1 entries.
+  const rowStart = (i) => i * (i + 1) / 2;
+
   function solvePositiveDefinite(lower, right, damping) {
     const n = right.length;
+    const first = new Int32Array(n);
     for (let i = 0; i < n; i++) {
-      for (let j = 0; j <= i; j++) {
-        let value = lower[i][j] + (i === j ? damping : 0);
-        for (let k = 0; k < j; k++) value -= lower[i][k] * lower[j][k];
-        lower[i][j] = i === j ? Math.sqrt(value) : value / lower[j][j];
+      const row = rowStart(i);
+      // Cholesky cannot fill entries to the left of a row's first nonzero.
+      let start = 0;
+      while (start < i && lower[row + start] === 0) start++;
+      first[i] = start;
+      for (let j = start; j <= i; j++) {
+        const other = rowStart(j);
+        let value = lower[row + j] + (i === j ? damping : 0);
+        for (let k = Math.max(start, first[j]); k < j; k++) value -= lower[row + k] * lower[other + k];
+        lower[row + j] = i === j ? Math.sqrt(value) : value / lower[other + j];
       }
-      for (let j = 0; j < i; j++) right[i] -= lower[i][j] * right[j];
-      right[i] /= lower[i][i];
+      for (let j = start; j < i; j++) right[i] -= lower[row + j] * right[j];
+      right[i] /= lower[row + i];
     }
     for (let i = n - 1; i >= 0; i--) {
-      for (let j = i + 1; j < n; j++) right[i] -= lower[j][i] * right[j];
-      right[i] /= lower[i][i];
+      for (let j = i + 1; j < n; j++) right[i] -= lower[rowStart(j) + i] * right[j];
+      right[i] /= lower[rowStart(i) + i];
     }
     return right;
   }
 
-  function rowProduct(first, second) {
-    let a = 0, b = 0, sum = 0;
-    while (a < first.length && b < second.length) {
-      const [i, u] = first[a], [j, v] = second[b];
-      if (i === j) sum += u * v;
-      if (i <= j) a++;
-      if (j <= i) b++;
-    }
-    return sum;
-  }
-
   function solveBlock(controls, records, delta, damping) {
+    const n = Math.min(records.length, controls.length);
+    const matrix = new Float64Array(rowStart(n)), right = new Float64Array(n);
     if (records.length < controls.length) {
       // (JᵀJ + λI)⁻¹Jᵀ = Jᵀ(JJᵀ + λI)⁻¹. Factor in the smaller space.
-      const gram = records.map(({ terms }, i) => Float64Array.from({ length: i + 1 }, (_, j) =>
-        rowProduct(terms, records[j].terms)));
-      const multipliers = solvePositiveDefinite(gram, Float64Array.from(records, ({ deficit }) => deficit), damping);
+      // Only rows sharing a coordinate have a nonzero dot product. Accumulate
+      // each column's outer product in the original coordinate order.
+      const columns = new Array(delta.length);
+      records.forEach(({ deficit, terms }, row) => {
+        right[row] = deficit;
+        for (const [i, value] of terms) (columns[i] ??= []).push([row, value]);
+      });
+      for (const column of columns) {
+        if (!column) continue;
+        for (let a = 0; a < column.length; a++) {
+          const [row, value] = column[a];
+          const offset = rowStart(row);
+          for (let b = 0; b <= a; b++) matrix[offset + column[b][0]] += value * column[b][1];
+        }
+      }
+      const multipliers = solvePositiveDefinite(matrix, right, damping);
       records.forEach(({ terms }, row) => {
         for (const [i, value] of terms) delta[i] += value * multipliers[row];
       });
       return;
     }
-    const matrix = controls.map((_, i) => new Float64Array(i + 1));
-    const local = new Map(controls.map((i, column) => [i, column]));
-    const right = new Float64Array(controls.length);
+    const local = new Int32Array(delta.length);
+    controls.forEach((i, column) => { local[i] = column; });
     for (const { deficit, terms } of records) {
-      const columns = terms.map(([i, value]) => [local.get(i), value]);
-      for (const [j, a] of columns) {
+      for (const [i, a] of terms) {
+        const j = local[i];
+        const offset = rowStart(j);
         right[j] += a * deficit;
-        for (const [k, b] of columns) {
-          if (k <= j) matrix[j][k] += a * b;
+        for (const [other, b] of terms) {
+          const k = local[other];
+          if (k <= j) matrix[offset + k] += a * b;
         }
       }
     }
@@ -149,14 +183,20 @@
     const fixed = Uint8Array.from({ length: n }, (_, i) => Number(level.ownership[Math.floor(i / 2)] === -1));
     let points = [...start, ...obstacles];
     let damping = .2;
+    let rows, cost;
     for (let i = 0; i < iterations; i++) {
-      const rows = [];
-      const cost = residuals(records, points, (deficit, normal, terms) => {
-        const row = terms.filter(([node]) => node < count).sort(([a], [b]) => a - b)
-          .flatMap(([node, factor]) => normal.map((component, axis) => [node * 2 + axis, factor * component]));
-        rows.push({ deficit, terms: row });
-      });
-      if (cost < 1 && !g.evaluate(level, points.slice(0, count)).count) return { points: points.slice(0, count), count: 0 };
+      // A rejected step changes the damping but leaves this linearization valid.
+      if (!rows) {
+        rows = [];
+        cost = residuals(records, points, (deficit, [x, y], terms) => {
+          const row = [];
+          for (const [node, factor] of terms.sort(([a], [b]) => a - b)) {
+            if (node < count) row.push([2 * node, factor * x], [2 * node + 1, factor * y]);
+          }
+          rows.push({ deficit, terms: row });
+        });
+        if (cost < 1 && !g.evaluate(level, points.slice(0, count)).count) return { points: points.slice(0, count), count: 0 };
+      }
       // Freeze directions pointing out of the board at its boundary.
       const frozen = fixed.slice();
       let delta = dampedStep(rows, frozen, damping);
@@ -176,8 +216,9 @@
       const gain = Math.min(1, 42 / Math.max(1, ...delta.map(Math.abs)));
       const trial = [...points.slice(0, count).map((point, i) => fixed[i * 2] ? point : point.map((value, axis) =>
         g.clamp(value + gain * delta[i * 2 + axis], ...board[axis]))), ...obstacles];
-      if (residuals(records, trial) < cost - 1e-8) {
+      if (residuals(records, trial, undefined, cost - 1e-8) < cost - 1e-8) {
         points = trial;
+        rows = undefined;
         damping = Math.max(1e-5, damping / 2);
       } else {
         damping *= 5;
