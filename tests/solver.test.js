@@ -418,6 +418,26 @@ test('node to edge clearance is 16 including exact tangency', () => {
   assert.equal(prepareExact(near).status, 'unsat');
 });
 
+test('distance screening preserves scaled clearances at segment endpoints', () => {
+  function conflicts(offset) {
+    const level = g.createLevel({
+      radius: 7, points: [[100, 100], [200, 100], [208, 100 - offset]],
+      edges: [[0, 1]], controls: [], obstacles: [{ center: [228 - offset, 100], r: 24 }],
+    });
+    const found = [];
+    g.evaluate(level, level.points, (_, kind) => found.push(kind));
+    return found;
+  }
+  // Tangency to the point-to-edge and disk-to-edge limits is legal.
+  assert.deepEqual(conflicts(0), ['node-obstacle', 'nodes', 'node-obstacle']);
+  assert.ok(conflicts(1e-8).includes('edge-obstacle'));
+  const level = g.createLevel({ radius: 7, points: [[100, 100], [200, 100], [208 - 1e-8, 100]],
+    edges: [[0, 1]], controls: [] });
+  const found = [];
+  g.evaluate(level, level.points, (_, kind) => found.push(kind));
+  assert.deepEqual(found, ['nodes', 'node-edge']);
+});
+
 test('the screenshot with a single crossed edge pair has a fully checked solution', () => {
   const level = puzzles.authored(crossingScreenshotDraft());
   const faults = [];

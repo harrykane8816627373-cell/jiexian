@@ -34,6 +34,22 @@
     return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
   };
 
+  function cappedDistance(a, b, limit) {
+    const dx = a[0] - b[0], dy = a[1] - b[1];
+    return Math.abs(dx) >= limit || Math.abs(dy) >= limit ? limit : Math.hypot(dx, dy);
+  }
+
+  function segmentBounds(a, b) {
+    return [Math.min(a[0], b[0]), Math.max(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+  }
+
+  function nearSegmentBounds(p, bounds, limit) {
+    // Leave room for projection rounding at the clearance boundary.
+    const padding = limit + eps;
+    return !(p[0] < bounds[0] - padding || p[0] > bounds[1] + padding ||
+      p[1] < bounds[2] - padding || p[1] > bounds[3] + padding);
+  }
+
   function createLevel(data) {
     const ownership = data.points.map(() => -1);
     let pairCount = 0;
@@ -132,14 +148,15 @@
     };
     points.forEach((p, i) => {
       for (let j = 0; j < i; j++) {
-        if (distance(p, points[j]) >= nodeSpacing) continue;
+        if (cappedDistance(p, points[j], nodeSpacing) >= nodeSpacing) continue;
         badNodes.add(i);
         badNodes.add(j);
         onConflict?.([i, j], 'nodes');
         count++;
       }
       level.obstacles.forEach(({ center, r }, j) => {
-        if (distance(p, center) >= r + spacing + obstacleGap) return;
+        const limit = r + spacing + obstacleGap;
+        if (cappedDistance(p, center, limit) >= limit) return;
         badNodes.add(i);
         badObstacles.add(j);
         onConflict?.([i], 'node-obstacle', j);
@@ -149,16 +166,18 @@
     level.edges.forEach(([i, j], edge) => {
       const a = points[i];
       const b = points[j];
-      if (distance(a, b) < nodeSpacing) badEdges.add(edge);
+      const bounds = segmentBounds(a, b);
+      if (cappedDistance(a, b, nodeSpacing) < nodeSpacing) badEdges.add(edge);
       points.forEach((p, k) => {
-        if (k === i || k === j || distanceToSegment(p, a, b) >= nodeEdge) return;
+        if (k === i || k === j || !nearSegmentBounds(p, bounds, nodeEdge) || distanceToSegment(p, a, b) >= nodeEdge) return;
         badNodes.add(k);
         markEdge(edge);
         onConflict?.([i, j, k], 'node-edge');
         count++;
       });
       level.obstacles.forEach(({ center, r }, k) => {
-        if (distanceToSegment(center, a, b) >= r + obstacleGap) return;
+        const limit = r + obstacleGap;
+        if (!nearSegmentBounds(center, bounds, limit) || distanceToSegment(center, a, b) >= limit) return;
         badObstacles.add(k);
         markEdge(edge);
         onConflict?.([i, j], 'edge-obstacle', k);
@@ -206,13 +225,16 @@
     };
     const directions = points.map(() => []);
     points.forEach((point, i) => {
-      for (let j = 0; j < i; j++) addGap(distance(point, points[j]) / readableNodeGap);
+      for (let j = 0; j < i; j++) addGap(cappedDistance(point, points[j], readableNodeGap) / readableNodeGap);
     });
     level.edges.forEach(([i, j]) => {
       const a = points[i];
       const b = points[j];
+      const bounds = segmentBounds(a, b);
       points.forEach((point, k) => {
-        if (k !== i && k !== j) addGap(distanceToSegment(point, a, b) / readableLineGap);
+        if (k !== i && k !== j && nearSegmentBounds(point, bounds, readableLineGap)) {
+          addGap(distanceToSegment(point, a, b) / readableLineGap);
+        }
       });
       const length = distance(a, b);
       if (!length) return;
