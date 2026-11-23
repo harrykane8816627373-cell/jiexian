@@ -6,6 +6,7 @@
   const angles = [0, Math.PI / 12, -Math.PI / 12, Math.PI / 6, -Math.PI / 6, Math.PI / 2];
   const bandAngles = Array.from({ length: 16 }, (_, i) => i * Math.PI / 8);
   const neighborDirections = [0, Math.PI / 7, -Math.PI / 7].map((angle) => [Math.cos(angle), Math.sin(angle)]);
+  const compactFrame = [[240, 660], [90, 450]];
 
   const crossingGap = .08;
 
@@ -624,7 +625,7 @@
   function findCorridor(level, crossings, ...seeds) {
     const bands = interiorBands(level);
     const pockets = bands.length ? [] : interruptedPockets(level);
-    if (!bands.length && !pockets.length) return null;
+    if (!bands.length && !pockets.length) return recoverCorridor(level);
     const edges = corridorEdges(level, crossings);
     const ordered = { ...level, edges };
     const drawings = globalThis.JiexianDrawing(level.points.length, edges);
@@ -633,15 +634,81 @@
     if (geometry.unsat) return null;
     // A blockage can split a strip into shorter usable pockets. Pack the
     // entire graph first and translate it among the circles as one shape.
-    if (pockets.length) return compactLayout(ordered, geometry, seeds, { drawings, pockets });
+    if (pockets.length) return compactLayout(ordered, geometry, seeds, { drawings, pockets }) ?? recoverCorridor(level);
     const { part: { records }, coordinates } = geometry;
     const obstacles = coordinates.slice(level.points.length);
     const distanceRecords = records.filter(({ kind }) => kind !== 'crossing');
     const starts = bandSeeds(drawings, bands, distanceRecords, obstacles, 12).slice(0, 24);
     const points = repairBandStarts(ordered, records, obstacles, starts.slice(0, 6)) ??
       growBand(ordered, records, obstacles, starts);
-    if (!points) return null;
+    if (!points) return recoverCorridor(level);
     return { status: 'solved', state: level.controls.map(({ members: [i] }) => points[i]), preserveRepair: true };
+  }
+
+  function structuralDrawings(level) {
+    const count = level.points.length;
+    const neighbors = Array.from({ length: count }, () => []);
+    for (const [a, b] of level.edges) {
+      neighbors[a].push(b);
+      neighbors[b].push(a);
+    }
+    // Refine degree classes by their neighborhoods. Equivalent vertices may
+    // still tie, but most DFS choices then depend on the graph rather than labels.
+    let classes = neighbors.map((adjacent) => adjacent.length);
+    let size = new Set(classes).size;
+    while (size < count) {
+      const signatures = neighbors.map((adjacent, i) =>
+        [classes[i], ...adjacent.map((node) => classes[node]).sort((a, b) => a - b)].join(','));
+      const ordered = [...new Set(signatures)].sort();
+      if (ordered.length === size) break;
+      const rank = new Map(ordered.map((key, i) => [key, i]));
+      classes = signatures.map((key) => rank.get(key));
+      size = ordered.length;
+    }
+    const order = classes.map((_, i) => i).sort((a, b) => classes[a] - classes[b] || a - b);
+    const index = new Int32Array(count);
+    order.forEach((node, i) => { index[node] = i; });
+    const edges = level.edges.map(([a, b]) => [Math.min(index[a], index[b]), Math.max(index[a], index[b])])
+      .sort(([a, b], [c, d]) => a - c || b - d);
+    return (globalThis.JiexianDrawing(count, edges) ?? []).slice(0, 6)
+      .map((drawing) => level.points.map((_, node) => drawing[index[node]]));
+  }
+
+  function recoverCorridor(level) {
+    if (level.obstacles.length < 6 || level.points.length < 20) return null;
+    // Crowded banks may have no common gap at their full radii. Use smaller
+    // circles to locate seed frames, then solve against the original circles.
+    const relaxed = { ...level, obstacles: level.obstacles.map((disk) => ({ ...disk, r: .75 * disk.r })) };
+    const frames = [...pocketFrames(level, interruptedPockets(relaxed)), ...interiorBands(relaxed)];
+    if (!frames.length) return null;
+    const model = globalThis.JiexianSolverGeometry.analyze(level, { forLength: true });
+    if (model.unsat) return null;
+    const { coordinates, part: { records } } = model;
+    const obstacles = coordinates.slice(level.points.length);
+    const clear = { ...level, obstacles: [] };
+    const internal = records.filter(({ vertices }) => vertices.every((node) => node < level.points.length));
+    const clearanceRecords = records.filter(({ kind }) => kind !== 'crossing');
+    const targets = shortTargets(level);
+    const drawings = structuralDrawings(level);
+    for (const frame of [compactFrame, [[150, 750], [195, 345]]]) {
+      const shapes = [];
+      for (const drawing of drawings) {
+        const fitted = fitDrawing(drawing, drawingBounds(drawing), frame);
+        const legal = improve(clear, internal, [], fitted, 65);
+        if (legal.count) continue;
+        let points = legal.points;
+        for (const caps of targets) points = shortenToCaps(clear, internal, [], points, caps, 30) ?? points;
+        shapes.push(points);
+      }
+      if (!shapes.length) continue;
+      const placements = [false, true].flatMap((reflect) => positionTemplates(level, shapes, records, obstacles, reflect))
+        .sort((a, b) => a.estimate - b.estimate);
+      const placed = placements.find(({ points }) => !g.evaluate(level, points).count)?.points ??
+        repairBandStarts(level, records, obstacles, placements.slice(0, 4)) ??
+        growBand(level, records, obstacles, bandSeeds(shapes, frames, clearanceRecords, obstacles, 4).slice(0, 10));
+      if (placed) return { status: 'solved', state: level.controls.map(({ members: [i] }) => placed[i]), preserveRepair: true };
+    }
+    return null;
   }
 
   function repair(level, problem, { starts = [], reembed = true, useBoundaryBands = false, restarts = 36, offer } = {}) {
@@ -800,6 +867,18 @@
     return level.obstacles.length > 0 && level.controls.length > 0 && level.controls.every(({ kind }) => kind === 'free');
   }
 
+  function shortTargets(level) {
+    const spacing = g.clearances(level).nodes;
+    return [2.12, 1.52, 1.15, 1.005].map((ratio) =>
+      level.edges.map((vertices) => ({ vertices, kind: 'short', distance: spacing * ratio })));
+  }
+
+  function shortenToCaps(level, records, obstacles, points, caps, repairIterations = 36) {
+    const moved = improve(level, [...records, ...caps], obstacles, points, 65);
+    const checked = moved.count ? improve(level, records, obstacles, moved.points, repairIterations) : moved;
+    return checked.count ? null : checked.points;
+  }
+
   function compact(level, model, state, offer, seeds = [], { drawings, pockets } = {}) {
     const { coordinates, part: { records } } = model;
     const obstacles = coordinates.slice(level.points.length);
@@ -813,15 +892,7 @@
       bestLength = length;
       return offer(level.controls.map(({ members: [i] }) => points[i]));
     }
-    const spacing = g.clearances(level).nodes;
-    const targets = [2.12, 1.52, 1.15, 1.005].map((ratio) =>
-      level.edges.map((vertices) => ({ vertices, kind: 'short', distance: spacing * ratio })));
-
-    function shortenToCaps(boardLevel, constraints, circles, points, caps) {
-      const moved = improve(boardLevel, [...constraints, ...caps], circles, points, 65);
-      const checked = moved.count ? improve(boardLevel, constraints, circles, moved.points, 36) : moved;
-      return checked.count ? null : checked.points;
-    }
+    const targets = shortTargets(level);
 
     function trySeed(start) {
       let points = start;
@@ -843,7 +914,6 @@
     // Pack the graph before placing it among the circles, so an obstacle
     // inside a cycle of the current layout cannot keep that cycle stretched.
     const starts = best ? [best] : [...new Set(seeds)].map((start) => g.positions(level, start));
-    const compactFrame = [[240, 660], [90, 450]];
     function packTemplate(points) {
       for (const caps of targets) points = shortenToCaps(clear, internal, [], points, caps) ?? points;
       if (g.evaluate(clear, points).count) return null;

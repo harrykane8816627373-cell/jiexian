@@ -36,6 +36,7 @@ const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24Screensh
   lengthScreenshotWrappedLayout, eightDiskScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
 const { eightDiskCorridorDraft } = require('./eight-corridor-fixture.cjs');
 const { node19Draft, interruptedNode19Draft } = require('./node19-fixture.cjs');
+const { recoveryCases, extremeDraft } = require('./extreme-fixture.cjs');
 const wasmBinary = gunzipSync(readFileSync(join(__dirname, '../vendor/z3smt2w.wasm.gz')));
 const z3 = require('../vendor/z3smt2w.js')({ wasmBinary, noInitialRun: true });
 const init = z3.cwrap('smt2Init', 'number', []);
@@ -331,6 +332,20 @@ test('wire 19–12 packs an interrupted corridor before local restarts', (t) => 
   t.mock.method(globalThis.JiexianSolverRelaxation, 'repair', () => assert.fail('unexpected long local repair'));
   const state = find(draft);
   assert.deepEqual(find({ ...draft, edges: [...draft.edges].reverse() }), state);
+});
+
+test('perturbed dense corridors solve without the algebraic fallback', async (t) => {
+  for (const name of recoveryCases) {
+    await t.test(name, () => {
+      const { puzzle } = puzzles.solveDraft(extremeDraft(g, name));
+      assert.ok(puzzle);
+      assert.ok(g.evaluate(puzzle, g.positions(puzzle, puzzle.initial)).count > 0);
+      const result = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+      checkSolution(puzzle, result);
+      assert.ok(g.positions(puzzle, result.state).every(([x, y]) =>
+        x >= g.margin && x <= g.width - g.margin && y >= g.margin && y <= g.height - g.margin));
+    });
+  }
 });
 
 for (const target of [27, 29]) {
