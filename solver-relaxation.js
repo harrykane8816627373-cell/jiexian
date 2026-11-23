@@ -731,6 +731,176 @@
     return null;
   }
 
+  function separatingFaces(level) {
+    const neighbors = level.points.map(() => new Set());
+    for (const [a, b] of level.edges) {
+      neighbors[a].add(b);
+      neighbors[b].add(a);
+    }
+    const faces = [];
+    for (const [a, adjacent] of neighbors.entries()) {
+      const sides = [...adjacent].filter((node) => node > a).sort((u, v) => u - v);
+      for (const [i, b] of sides.entries()) {
+        for (const d of sides.slice(i + 1)) {
+          if (neighbors[b].has(d)) continue;
+          for (const c of [...neighbors[b]].sort((u, v) => u - v)) {
+            if (c <= a || neighbors[a].has(c) || !neighbors[d].has(c)) continue;
+            const nodes = [a, b, c, d];
+            const seen = new Set(nodes);
+            const components = [];
+            for (const [node] of neighbors.entries()) {
+              if (seen.has(node)) continue;
+              const component = new Set([node]);
+              seen.add(node);
+              for (const u of component) {
+                for (const v of neighbors[u]) {
+                  if (seen.has(v)) continue;
+                  seen.add(v);
+                  component.add(v);
+                }
+              }
+              components.push(component.size);
+            }
+            components.sort((u, v) => v - u);
+            if (components[1] >= 5) faces.push({ nodes, size: components[1] });
+          }
+        }
+      }
+    }
+    return faces.sort((a, b) => b.size - a.size).slice(0, 2);
+  }
+
+  function quadrilateralPockets(level) {
+    const { nodes, spacing, obstacleGap } = g.clearances(level);
+    const grid = Math.max(14, spacing);
+    const sites = [];
+    for (let x = board[0][0]; x <= board[0][1]; x += grid) {
+      for (let y = board[1][0]; y <= board[1][1]; y += grid) {
+        const point = [x, y];
+        if (level.obstacles.every(({ center, r }) => g.distance(point, center) >= r + spacing + obstacleGap + .02)) {
+          sites.push(point);
+        }
+      }
+    }
+    const visible = sites.map((a, i) => sites.flatMap((b, j) =>
+      i !== j && g.distance(a, b) >= nodes + 1 && level.obstacles.every(({ center, r }) =>
+        g.distanceToSegment(center, a, b) >= r + obstacleGap + .02) ? [j] : []));
+    const links = visible.map((row) => new Set(row));
+    let seed = 45;
+    const pick = (choices) => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return choices[Math.floor(seed / 2 ** 32 * choices.length)];
+    };
+    const ids = sites.map((_, i) => i);
+    const tested = new Set();
+    const pockets = [];
+    const corner = nodes * nodes * .64;
+    for (let attempt = 0; attempt < 40000 && ids.length; attempt++) {
+      const corners = [pick(ids)];
+      while (corners.length < 4 && visible[corners.at(-1)].length) corners.push(pick(visible[corners.at(-1)]));
+      if (corners.length < 4 || !links[corners[0]].has(corners[3])) continue;
+      const key = [...corners].sort((a, b) => a - b).join(',');
+      if (tested.has(key)) continue;
+      const polygon = corners.map((i) => sites[i]);
+      if (polygon.every((p, i) => attachmentSide(p, polygon[(i + 1) % 4], polygon[(i + 2) % 4]) < -corner)) polygon.reverse();
+      if (!polygon.every((p, i) => attachmentSide(p, polygon[(i + 1) % 4], polygon[(i + 2) % 4]) > corner)) continue;
+      tested.add(key);
+      const capacity = sites.filter((p) => polygon.every((a, i) => attachmentSide(a, polygon[(i + 1) % 4], p) >= 0)).length;
+      if (capacity >= 19) pockets.push({ polygon, capacity });
+    }
+    return pockets.sort((a, b) => b.capacity - a.capacity).slice(0, 640);
+  }
+
+  function faceCoordinates(source, face) {
+    const polygon = face.map((node) => source[node]);
+    const [a, , b] = polygon;
+    const side = Math.sign(attachmentSide(a, b, polygon[1]));
+    if (!side || polygon.some((p, i) => Math.sign(attachmentSide(polygon[(i + 3) % 4], polygon[(i + 1) % 4], p)) !== side)) {
+      return null;
+    }
+    // Keep the two triangles of the face together while mapping each side of
+    // the diagonal by its own affine transformation.
+    return source.map((point) => {
+      const corner = Math.sign(attachmentSide(a, b, point)) === side ? 1 : 3;
+      const c = polygon[corner];
+      return { along: attachmentSide(a, c, point) / attachmentSide(a, c, b),
+        across: attachmentSide(a, b, point) / attachmentSide(a, b, c), corner };
+    });
+  }
+
+  function fitFace(coordinates, face, polygon) {
+    const [a, , b] = polygon;
+    const points = coordinates.map(({ along, across, corner }) => a.map((origin, axis) =>
+      g.clamp(origin + along * (b[axis] - origin) + across * (polygon[corner][axis] - origin), ...board[axis])));
+    face.forEach((node, i) => { points[node] = polygon[i]; });
+    return points;
+  }
+
+  function placeSeparatingFaces(level, faces, crossings, current) {
+    const pockets = quadrilateralPockets(level);
+    if (!pockets.length) return null;
+    const geometry = globalThis.JiexianSolverGeometry.analyze(level, { forLength: true });
+    if (geometry.unsat) return null;
+    const { part: { records }, coordinates } = geometry;
+    const obstacles = coordinates.slice(level.points.length);
+    const clearanceRecords = records.filter(({ kind }) => kind !== 'crossing');
+    for (const scale of [.9, .85]) {
+      // A feasible drawing with wider passages provides a different embedding
+      // for the two sides. Every pocket and final repair uses the full circles.
+      const relaxed = { ...level, obstacles: level.obstacles.map((disk) => ({ ...disk, r: disk.r * scale })) };
+      const start = findCorridor(relaxed, crossings, current);
+      if (!start) continue;
+      const source = g.positions(relaxed, start.state);
+      for (const { nodes } of faces) {
+        const ranked = [];
+        for (const face of [nodes, [...nodes.slice(1), nodes[0]]]) {
+          const coords = faceCoordinates(source, face);
+          if (!coords) continue;
+          for (const { polygon } of pockets) {
+            for (let i = 0; i < 4; i++) {
+              for (const direction of [1, -1]) {
+                const corners = face.map((_, j) => polygon[(i + direction * j + 4) % 4]);
+                const points = fitFace(coords, face, corners);
+                const limit = ranked[47]?.cost ?? Infinity;
+                const cost = residuals(clearanceRecords, [...points, ...obstacles], undefined, limit);
+                if (cost >= limit) continue;
+                ranked.push({ points, cost });
+                ranked.sort((a, b) => a.cost - b.cost);
+                if (ranked.length > 48) ranked.pop();
+              }
+            }
+          }
+        }
+        const points = repairBandStarts(level, records, obstacles, ranked);
+        if (points) return { status: 'solved', state: level.controls.map(({ members: [i] }) => points[i]), preserveRepair: true };
+      }
+    }
+    return null;
+  }
+
+  function reembedFaces(level, crossings, current) {
+    if (level.obstacles.length < 6 || level.points.length < 20 || !supportsCompact(level) ||
+        level.controls.length !== level.points.length) return null;
+    const faces = separatingFaces(level);
+    if (!faces.length) return null;
+    // Sample the same pockets for a board and its reflection. Orient the
+    // obstacle field by the midpoint of its outermost circle centers.
+    const reflected = board.map(([lo, hi], axis) => {
+      const centers = level.obstacles.map(({ center }) => center[axis]);
+      const midpoint = Math.min(...centers) + Math.max(...centers);
+      return axis === 0 ? midpoint < lo + hi : midpoint > lo + hi;
+    });
+    if (!reflected.some(Boolean)) return placeSeparatingFaces(level, faces, crossings, current);
+    const reflect = (point) => point.map((value, axis) => reflected[axis] ?
+      board[axis][0] + board[axis][1] - value : value);
+    const oriented = { ...level, points: level.points.map(reflect),
+      obstacles: level.obstacles.map((disk) => ({ ...disk, center: reflect(disk.center) })) };
+    const answer = placeSeparatingFaces(oriented, faces, crossings, current.map(reflect));
+    if (!answer) return null;
+    const state = answer.state.map(reflect);
+    return g.evaluate(level, g.positions(level, state)).count ? null : { ...answer, state };
+  }
+
   function repair(level, problem, { starts = [], reembed = true, useBoundaryBands = false, restarts = 36, offer } = {}) {
     if (level.controls.length !== level.points.length || level.controls.some(({ kind }) => kind !== 'free')) return null;
     const records = [...problem.parts, ...problem.retryParts].flatMap(({ records }) => records);
@@ -1012,5 +1182,5 @@
     return result;
   }
 
-  globalThis.JiexianSolverRelaxation = { repair, repairSplit, findCorridor, compact, findCompact, supportsCompact };
+  globalThis.JiexianSolverRelaxation = { repair, repairSplit, findCorridor, reembedFaces, compact, findCompact, supportsCompact };
 })();

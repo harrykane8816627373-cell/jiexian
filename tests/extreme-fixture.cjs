@@ -34,13 +34,18 @@ const extremeCases = new Map([
   ['pocket-30-seed107', [interruptedNode19Draft, 30, 107]],
   ['pocket-25-seed109', [interruptedNode19Draft, 25, 109]],
   ['pocket-40-seed109', [interruptedNode19Draft, 40, 109]],
+  ['corridor-42-seed107', [eightDiskCorridorDraft, 42, 107]],
+  ['corridor-42-seed107-reflected', [eightDiskCorridorDraft, 42, 107, true]],
 ]);
 const recoveryCases = [...extremeCases.keys()];
-extremeCases.set('corridor-42-seed107', [eightDiskCorridorDraft, 42, 107]);
 
 function extremeDraft(g, name) {
-  const [createDraft, strength, seed] = extremeCases.get(name);
-  return perturb(g, createDraft(), strength, seed);
+  const [createDraft, strength, seed, reflected] = extremeCases.get(name);
+  const draft = perturb(g, createDraft(), strength, seed);
+  if (!reflected) return draft;
+  const reflect = ([x, y]) => [g.width - x, y];
+  return { ...draft, points: draft.points.map(reflect),
+    obstacles: draft.obstacles.map((disk) => ({ ...disk, center: reflect(disk.center) })) };
 }
 
 module.exports = { extremeCases, recoveryCases, extremeDraft };

@@ -38,13 +38,12 @@
     const problem = prepare?.(puzzle, current);
     if (problem?.status === 'solved' || problem?.status === 'unsat') return problem;
     const relaxation = globalThis.JiexianSolverRelaxation;
-    if (reembed && problem?.status === 'ready') {
+    const crossings = reembed ? initial.filter(({ kind }) => kind === 'crossing') : [];
+    const crowded = reembed && (crossings.length >= 5 || initial.length >= puzzle.points.length);
+    if (crowded && problem?.status === 'ready') {
       // Several crossed wires can trap repairs that start from the current layout.
-      const crossings = initial.filter(({ kind }) => kind === 'crossing');
-      if (crossings.length >= 5 || initial.length >= puzzle.points.length) {
-        const corridor = relaxation?.findCorridor(puzzle, crossings, candidate, current);
-        if (corridor) return corridor;
-      }
+      const corridor = relaxation?.findCorridor(puzzle, crossings, candidate, current);
+      if (corridor) return corridor;
     }
     const relax = relaxation?.repair;
     const previousSeed = candidate;
@@ -72,6 +71,10 @@
       if (relaxContacts && candidate !== current && candidate !== previousSeed && fewest <= 3) {
         const polished = relax(puzzle, problem, { starts: [candidate], reembed: false, restarts: 12, offer });
         if (polished) return polished;
+      }
+      if (crowded) {
+        const embedded = relaxation?.reembedFaces?.(puzzle, crossings, current);
+        if (embedded) return embedded;
       }
     }
     return problem?.status === 'ready' ? { status: 'ready', problem, candidate } : problem ?? { status: 'local' };
