@@ -122,14 +122,14 @@
     return right;
   }
 
-  function solveBlock(controls, records, delta, damping) {
+  function buildNormalEquations(controls, records, coordinateCount) {
     const n = Math.min(records.length, controls.length);
     const matrix = new Float64Array(rowStart(n)), right = new Float64Array(n);
     if (records.length < controls.length) {
       // (JᵀJ + λI)⁻¹Jᵀ = Jᵀ(JJᵀ + λI)⁻¹. Factor in the smaller space.
       // Only rows sharing a coordinate have a nonzero dot product. Accumulate
       // each column's outer product in the original coordinate order.
-      const columns = new Array(delta.length);
+      const columns = new Array(coordinateCount);
       records.forEach(({ deficit, terms }, row) => {
         right[row] = deficit;
         for (const [i, value] of terms) (columns[i] ??= []).push([row, value]);
@@ -142,39 +142,58 @@
           for (let b = 0; b <= a; b++) matrix[offset + column[b][0]] += value * column[b][1];
         }
       }
-      const multipliers = solvePositiveDefinite(matrix, right, damping);
-      records.forEach(({ terms }, row) => {
-        for (const [i, value] of terms) delta[i] += value * multipliers[row];
-      });
-      return;
+      return { matrix, right };
     }
-    const local = new Int32Array(delta.length);
+    const local = new Int32Array(coordinateCount);
     controls.forEach((i, column) => { local[i] = column; });
     for (const { deficit, terms } of records) {
-      for (const [i, a] of terms) {
+      for (let aIndex = 0; aIndex < terms.length; aIndex++) {
+        const [i, a] = terms[aIndex];
         const j = local[i];
-        const offset = rowStart(j);
+        const row = rowStart(j);
         right[j] += a * deficit;
-        for (const [other, b] of terms) {
+        matrix[row + j] += a * a;
+        // Each pair contributes to just one entry in the stored triangle.
+        for (let bIndex = 0; bIndex < aIndex; bIndex++) {
+          const [other, b] = terms[bIndex];
           const k = local[other];
-          if (k <= j) matrix[offset + k] += a * b;
+          const entry = j > k ? row + k : rowStart(k) + j;
+          matrix[entry] += a * b;
         }
       }
     }
-    solvePositiveDefinite(matrix, right, damping);
-    controls.forEach((i, column) => { delta[i] = right[column]; });
+    return { matrix, right };
   }
 
-  function dampedStep(rows, frozen, damping) {
+  function buildDampedSystem(rows, frozen) {
     const active = [];
     for (const { deficit, terms } of rows) {
-      const movable = terms.filter(([i, value]) => !frozen[i] && value !== 0);
-      if (movable.length) active.push({ deficit, terms: movable, support: movable.map(([i]) => i) });
+      const movable = [], support = [];
+      for (const term of terms) {
+        const [i, value] = term;
+        if (frozen[i] || value === 0) continue;
+        movable.push(term);
+        support.push(i);
+      }
+      if (support.length) active.push({ deficit, terms: movable, support });
     }
-    const delta = new Float64Array(frozen.length);
     // Rows in different components share no free coordinates, so the normal equations decouple.
-    for (const { controls, records } of globalThis.JiexianSolverGeometry.components(active, frozen.length)) {
-      solveBlock(controls, records, delta, damping);
+    return globalThis.JiexianSolverGeometry.components(active, frozen.length).map(({ controls, records }) =>
+      ({ controls, records, ...buildNormalEquations(controls, records, frozen.length) }));
+  }
+
+  function dampedStep(blocks, size, damping, reuse) {
+    const delta = new Float64Array(size);
+    for (const { controls, records, matrix, right } of blocks) {
+      const solution = solvePositiveDefinite(reuse ? matrix.slice() : matrix,
+        reuse ? right.slice() : right, damping);
+      if (records.length < controls.length) {
+        records.forEach(({ terms }, row) => {
+          for (const [i, value] of terms) delta[i] += value * solution[row];
+        });
+      } else {
+        controls.forEach((i, column) => { delta[i] = solution[column]; });
+      }
     }
     return delta;
   }
@@ -184,9 +203,9 @@
     const fixed = Uint8Array.from({ length: n }, (_, i) => Number(level.ownership[Math.floor(i / 2)] === -1));
     let points = [...start, ...obstacles];
     let damping = .2;
-    let rows, cost;
+    let rows, cost, system;
     for (let i = 0; i < iterations; i++) {
-      // A rejected step changes the damping but leaves this linearization valid.
+      // Rejecting a step changes damping while keeping the current normal equations valid.
       if (!rows) {
         rows = [];
         cost = residuals(records, points, (deficit, [x, y], terms) => {
@@ -197,10 +216,11 @@
           rows.push({ deficit, terms: row });
         });
         if (cost < 1 && !g.evaluate(level, points.slice(0, count)).count) return { points: points.slice(0, count), count: 0 };
+        system = buildDampedSystem(rows, fixed);
       }
       // Freeze directions pointing out of the board at its boundary.
       const frozen = fixed.slice();
-      let delta = dampedStep(rows, frozen, damping);
+      let delta = dampedStep(system, n, damping, true);
       for (let pass = 0; pass < 3; pass++) {
         let blocked = false;
         for (let j = 0; j < n; j++) {
@@ -212,7 +232,7 @@
           }
         }
         if (!blocked) break;
-        delta = dampedStep(rows, frozen, damping);
+        delta = dampedStep(buildDampedSystem(rows, frozen), n, damping, false);
       }
       const gain = Math.min(1, 42 / Math.max(1, ...delta.map(Math.abs)));
       const trial = [...points.slice(0, count).map((point, i) => fixed[i * 2] ? point : point.map((value, axis) =>
@@ -806,7 +826,10 @@
 
   function positionTemplates(level, drawings, records, obstacles, reflected = false) {
     const clearance = g.clearances(level).nodes;
-    const obstacleRecords = records.filter(({ vertices }) => vertices.some((i) => i >= level.points.length));
+    const count = level.points.length;
+    const obstacleRecords = records.filter(({ vertices }) => vertices.some((i) => i >= count));
+    const trial = [...Array.from({ length: count }, () => [0, 0]), ...obstacles];
+    const [[left, right], [top, bottom]] = board;
     const placements = [];
     for (const drawing of drawings) {
       const length = g.totalLength(level, drawing);
@@ -823,12 +846,13 @@
         });
         let best = Infinity, points;
         for (const x of horizontal) {
+          for (let i = 0; i < count; i++) trial[i][0] = g.clamp(rotated[i][0] + x, left, right);
           for (const y of vertical) {
-            const trial = rotated.map(([u, v]) => [g.clamp(u + x, ...board[0]), g.clamp(v + y, ...board[1])]);
-            const cost = residuals(obstacleRecords, [...trial, ...obstacles], undefined, best);
+            for (let i = 0; i < count; i++) trial[i][1] = g.clamp(rotated[i][1] + y, top, bottom);
+            const cost = residuals(obstacleRecords, trial, undefined, best);
             if (cost >= best) continue;
             best = cost;
-            points = trial;
+            points = trial.slice(0, count).map((point) => [...point]);
           }
         }
         if (points) rotations.push({ points, cost: best });

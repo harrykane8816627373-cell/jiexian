@@ -279,6 +279,8 @@ $$
 
 可单独运行 `node tests/benchmark-extreme.cjs corridor-42-seed107` 检查另一种 26 点、36 边、8 圆棋盘。此例的两个版本都进入 Z3，并在同一 20 秒上限内未返回判定。
 
+后续的几何计算优化复用了重试时的法方程，只组装对称矩阵的下三角，并让平移候选共用临时坐标缓冲区。以 `ab9a221` 为对照，26 点用例三次独立进程的几何阶段中位数从 7.59 秒降到 6.14 秒，移交给 Z3 的候选坐标逐项相同。这项计时只覆盖几何阶段。
+
 ```sh
 git worktree add --detach ../jiexian-extreme-baseline 0574599
 node tests/benchmark-extreme.cjs --root ../jiexian-extreme-baseline pocket-20-seed103 pocket-36-seed103 pocket-50-seed103 pocket-60-seed103

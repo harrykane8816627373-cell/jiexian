@@ -165,7 +165,7 @@
   }
 
   function components(records, count) {
-    const parent = Array.from({ length: count }, (_, i) => i);
+    const parent = Int32Array.from({ length: count }, (_, i) => i);
     const root = (i) => {
       while (parent[i] !== i) {
         parent[i] = parent[parent[i]];
@@ -173,15 +173,16 @@
       }
       return i;
     };
-    for (const { support: [a, ...rest] } of records) {
-      for (const b of rest) parent[root(b)] = root(a);
+    for (const { support } of records) {
+      const first = root(support[0]);
+      for (let i = 1; i < support.length; i++) parent[root(support[i])] = first;
     }
     const groups = new Map();
     for (const record of records) {
       const i = root(record.support[0]);
-      if (!groups.has(i)) groups.set(i, { controls: new Set(), records: [] });
-      const part = groups.get(i);
-      record.support.forEach((index) => part.controls.add(index));
+      let part = groups.get(i);
+      if (!part) groups.set(i, part = { controls: new Set(), records: [] });
+      for (const index of record.support) part.controls.add(index);
       part.records.push(record);
     }
     return [...groups.values()].map(({ controls, records }) => ({ controls: [...controls], records }))
