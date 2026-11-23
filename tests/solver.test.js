@@ -30,7 +30,7 @@ const { screenshotDraft, coupledScreenshotDraft, mixedScreenshotDraft, contactSc
   require('./repair-fixture.cjs');
 const { portraitDrafts, pinnedObstaclePortraitDraft, blockedPortraitDraft } = require('./portrait-fixture.cjs');
 const { rotorChord } = require('./orbit-fixture.cjs');
-const { corridorLevel } = require('./clearance-fixture.cjs');
+const { corridorLevel, denseContactCases } = require('./clearance-fixture.cjs');
 const { crossingScreenshotDraft, crossingAndClearanceScreenshotDraft } = require('./crossing-fixture.cjs');
 const { obstacleClusterScreenshotDraft, maxObstacleClusterDrafts, near24ScreenshotDraft, lengthScreenshotDraft,
   lengthScreenshotWrappedLayout, eightDiskScreenshotDraft } = require('./obstacle-cluster-fixture.cjs');
@@ -1140,6 +1140,53 @@ test('an impossible frozen neighborhood falls through to a solution with both co
   } finally {
     destroy(context);
   }
+});
+
+for (const [name, createLevel] of denseContactCases) {
+  test(`${name} repairs concentrated conflicts without the full algebraic model`, () => {
+    const level = createLevel(g);
+    assert.ok(g.evaluate(level, level.points).count > 8);
+    const problem = prepareExact(level);
+    assert.equal(problem.status, 'ready');
+    assert.equal(problem.parts.length, 1);
+    const hubs = new Set(level.edges.map(([hub]) => hub));
+    const context = init();
+    const declared = new Set();
+    let bounded = false;
+    try {
+      const result = solveExact(level, (command) => {
+        const limit = /^\(set-option :rlimit (\d+)\)$/.exec(command);
+        if (limit) bounded = Number(limit[1]) > 0;
+        if (command === '(check-sat-using qfnra-nlsat)') assert.ok(bounded);
+        for (const [, node] of command.matchAll(/\(declare-const [xy](\d+) Real\)/g)) declared.add(Number(node));
+        return ask(context, command);
+      }, problem, level.initial);
+      checkSolution(level, result);
+      assert.deepEqual(declared, hubs);
+      result.state.forEach((value, i) => { if (!hubs.has(i)) assert.deepEqual(value, level.initial[i]); });
+    } finally {
+      destroy(context);
+    }
+  });
+}
+
+test('a rejected dense contact probe still runs the unrestricted model', () => {
+  const level = denseContactCases.get('seeded-single-fan')(g);
+  let bounded = false, probes = 0, unrestricted = 0;
+  const result = solveExact(level, (command) => {
+    const limit = /^\(set-option :rlimit (\d+)\)$/.exec(command);
+    if (limit) bounded = Number(limit[1]) > 0;
+    if (command !== '(check-sat-using qfnra-nlsat)') return '';
+    if (bounded) {
+      probes++;
+      return 'unsat';
+    }
+    unrestricted++;
+    return 'unknown';
+  }, prepareExact(level), level.initial);
+  assert.equal(result.status, 'unknown');
+  assert.ok(probes > 0 && probes <= 8);
+  assert.equal(unrestricted, 1);
 });
 
 test('one active control solves a very narrow obstacle corridor in a 26-node part', () => {

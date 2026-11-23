@@ -16,4 +16,28 @@ function corridorLevel(g, { halfGap, shift, rightShift = 0 }) {
   return g.createLevel({ points, edges, obstacles, controls: points.map((point, i) => g.free(i, point)) });
 }
 
-module.exports = { corridorLevel };
+function contactFans(g, separated) {
+  const hubs = separated ? [[110, 145], [510, 145], [110, 385], [510, 385]] : [[128, 270]];
+  const leaves = separated ? 4 : 12;
+  const spread = separated ? .44 : .74;
+  const reach = separated ? 185 : 325;
+  const points = [], edges = [], obstacles = [];
+  for (const [x, y] of hubs) {
+    const hub = points.length;
+    points.push([x, y]);
+    obstacles.push({ center: [x + 5, y], r: 28 });
+    for (let i = 0; i < leaves; i++) {
+      const angle = -spread + 2 * spread * i / (leaves - 1);
+      edges.push([hub, points.length]);
+      points.push([x + 72 + reach * Math.cos(angle), y + reach * Math.sin(angle)]);
+    }
+  }
+  return g.createLevel({ points, edges, obstacles, controls: points.map((point, i) => g.free(i, point)) });
+}
+
+const denseContactCases = new Map([
+  ['seeded-single-fan', (g) => contactFans(g, false)],
+  ['seeded-separated-fans', (g) => contactFans(g, true)],
+]);
+
+module.exports = { corridorLevel, denseContactCases };

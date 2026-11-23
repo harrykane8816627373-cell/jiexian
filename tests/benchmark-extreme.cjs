@@ -7,6 +7,7 @@ const { join, resolve } = require('node:path');
 const { parseArgs } = require('node:util');
 const { gunzipSync } = require('node:zlib');
 const { extremeCases, recoveryCases, extremeDraft } = require('./extreme-fixture.cjs');
+const { denseContactCases } = require('./clearance-fixture.cjs');
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string', default: join(__dirname, '..') },
@@ -17,22 +18,28 @@ const root = resolve(values.root);
 const timeout = Number(values.timeout);
 assert.ok(Number.isSafeInteger(timeout) && timeout > 0, '--timeout must be a positive integer in milliseconds');
 const selected = positionals.length ? positionals : recoveryCases;
-for (const name of selected) assert.ok(extremeCases.has(name), 'Unknown benchmark case: ' + name);
+for (const name of selected) assert.ok(extremeCases.has(name) || denseContactCases.has(name), 'Unknown benchmark case: ' + name);
 
 if (values.child) {
   for (const module of ['engine', 'planarity', 'solver-contact-repair', 'solver-obstacle-corridors', 'solver-coupled-repair',
     'solver-repair', 'solver-obstacles', 'puzzles', 'solver-search', 'solver-relaxation', 'solver-breakout', 'solver-tracks',
     'solver-regions', 'solver-geometry', 'exact-solver']) require(join(root, module + '.js'));
   const g = globalThis.Jiexian;
-  const name = selected[0], draft = extremeDraft(g, name);
-  const { puzzle } = globalThis.JiexianPuzzles.solveDraft(draft);
+  const name = selected[0], seeded = denseContactCases.get(name);
+  const puzzle = seeded ? seeded(g) : globalThis.JiexianPuzzles.solveDraft(extremeDraft(g, name)).puzzle;
   assert.ok(puzzle);
   assert.ok(g.evaluate(puzzle, puzzle.points).count);
   const { prepareExact, solveExact } = globalThis.JiexianExact;
   const begin = performance.now();
-  let result = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+  let result;
+  if (seeded) {
+    const problem = prepareExact(puzzle);
+    result = problem.status === 'ready' ? { status: 'ready', problem, candidate: puzzle.initial } : problem;
+  } else {
+    result = globalThis.JiexianSolverSearch.search(puzzle, puzzle.initial, prepareExact);
+  }
   const fast = result.status;
-  console.log(`geometry ${fast} ${(performance.now() - begin).toFixed(1)} ms`);
+  console.log(`${seeded ? 'seeded' : 'geometry'} ${fast} ${(performance.now() - begin).toFixed(1)} ms`);
   if (fast === 'ready') {
     const vendor = join(root, 'vendor');
     const wasmBinary = gunzipSync(readFileSync(join(vendor, 'z3smt2w.wasm.gz')));

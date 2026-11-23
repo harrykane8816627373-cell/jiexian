@@ -2,7 +2,7 @@
   'use strict';
 
   const g = globalThis.Jiexian;
-  const { analyze } = globalThis.JiexianSolverGeometry;
+  const { analyze, components } = globalThis.JiexianSolverGeometry;
   const call = (op, ...args) => `(${op} ${args.join(' ')})`;
   const add = (...args) => call('+', ...args);
   const sub = (a, b) => call('-', a, b);
@@ -233,7 +233,7 @@
     return failed;
   }
 
-  function smallestSupports(conflicts, required) {
+  function smallestSupports(conflicts, required, size = 2) {
     const choices = [];
     const seen = new Set();
     function visit(active) {
@@ -242,10 +242,21 @@
       seen.add(key);
       const hit = conflicts.find(({ support }) => !support.some((i) => active.has(i)));
       if (!hit) choices.push(active);
-      else if (active.size < 2) for (const i of hit.support) visit(new Set([...active, i]));
+      else if (active.size < size) for (const i of hit.support) visit(new Set([...active, i]));
     }
     visit(new Set(required));
     return choices.sort((a, b) => a.size - b.size);
+  }
+
+  function contactNeighborhoods(failed, count) {
+    const covers = smallestSupports(failed, [], 3);
+    if (covers.length) return covers;
+    // Sharing a violated predicate groups contacts that may need a joint
+    // change. The complete local model still checks every affected predicate.
+    const groups = components(failed, count);
+    if (groups.length < 2) return [];
+    return groups.sort((a, b) => b.records.length - a.records.length).flatMap(({ records }) =>
+      smallestSupports(records, []).slice(0, 2));
   }
 
   function restrictedPart(level, part, active, pose, points, radius) {
@@ -348,20 +359,47 @@
       let attempts = 0;
       let smallAttempts = 0;
       let blockAttempts = 0;
+      let contactAttempts = 0;
       for (const part of parts) {
         if (attempts >= 3) break;
-        const failed = violations(part, seedPoints);
+        let failed = violations(part, seedPoints);
         const required = outside(part);
-        const active = new Set([...required, ...failed.flatMap(({ support }) => support)]);
         const frozenPoints = (selected) => coordinates.map((point, i) =>
           selected.has(level.ownership[i]) ? point : seedPoints[i]);
-        const tryWitness = (local, selected) => {
+        const tryCandidate = (local, selected) => {
           const proposed = g.copy(trial);
-          if (solve(local, frozenPoints(selected), proposed, null, true) === 'sat' && playable(level, proposed)) {
-            return { status: 'solved', state: proposed, preserveRepair: true };
-          }
-          return null;
+          return solve(local, frozenPoints(selected), proposed, null, true) === 'sat' ? proposed : null;
         };
+        const tryWitness = (local, selected) => {
+          const proposed = tryCandidate(local, selected);
+          return proposed && playable(level, proposed) ? { status: 'solved', state: proposed, preserveRepair: true } : null;
+        };
+        if (level.obstacles.length && failed.length > 8 && !required.length) {
+          const radius = 3 * g.clearances(level).nodes;
+          let count = g.evaluate(level, seedPoints.slice(0, level.points.length)).count;
+          while (failed.length && contactAttempts < 8) {
+            let improved = false;
+            for (const selected of contactNeighborhoods(failed, level.controls.length)) {
+              if (contactAttempts >= 8) break;
+              const local = restrictedPart(level, part, selected, trial, seedPoints, radius);
+              if (!local) continue;
+              contactAttempts++;
+              const proposed = tryCandidate(local, selected);
+              if (!proposed) continue;
+              const faults = g.evaluate(level, g.positions(level, proposed)).count;
+              if (!faults) return { status: 'solved', state: proposed, preserveRepair: true };
+              if (faults >= count) continue;
+              for (const i of selected) trial[i] = proposed[i];
+              seedPoints = positions();
+              failed = violations(part, seedPoints);
+              count = faults;
+              improved = true;
+              break;
+            }
+            if (!improved) break;
+          }
+        }
+        const active = new Set([...required, ...failed.flatMap(({ support }) => support)]);
         if (level.obstacles.length && failed.length && failed.length <= 8 && required.length <= 2) {
           // Every current conflict must lose at least one frozen control. This
           // branch looks for a witness only, even when every small support fails.
