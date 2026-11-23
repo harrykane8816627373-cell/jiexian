@@ -2,7 +2,7 @@
 
 一款空间益智游戏。拖动节点消除连线冲突，也可以自己设计棋盘，挑战更短的总线长。
 
-[GitHub Pages 在线试玩](https://harrykane8816627373-cell.github.io/jiexian/) · [Pagelet 镜像](https://jiexian-19.pagelet.host/) · [求解器与基准](./SOLVER.md)
+[GitHub Pages 在线试玩](https://harrykane8816627373-cell.github.io/jiexian/) · [Pagelet 镜像](https://jiexian.pagelet.host/) · [求解器与基准](./SOLVER.md)
 
 ## 本次更新
 
